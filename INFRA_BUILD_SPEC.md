@@ -165,7 +165,7 @@ docker compose run --rm vault-seed   # loads §3 row 10 into Vault
 docker compose run --rm search-seed  # loads §3 row 11 into OpenSearch
 ```
 
-Endpoints (default): storefront `http://localhost:8080`, Keycloak admin (via
+Endpoints (default): storefront `http://localhost/` (HTTP port 80), Keycloak admin (via
 bastion / `mgmt_net`) `:8081`, Wazuh dashboard `:5601`, Vault `:8200`.
 
 See `infra/README.md` for the per-service URL/port table and the bastion login.

@@ -23,12 +23,12 @@ First boot of the databases runs the `seed/<db>/01_schema.sql` then
 
 | Service | URL | Notes |
 | --- | --- | --- |
-| Storefront (edge) | http://localhost:8080 | links to each API |
-| Catalog API | http://localhost:8080/api/catalog/products | PostgREST |
-| Orders API | http://localhost:8080/api/orders/orders | PostgREST |
-| Checkout/Payment API | http://localhost:8080/api/checkout/transactions | PostgREST (finance) |
-| Seller API (Tier 2) | http://localhost:8080/api/seller/sellers | PostgREST |
-| Internal Ops API (Tier 2) | http://localhost:8080/api/ops/feature_flags | PostgREST |
+| Storefront (edge) | http://localhost/ | links to each API (HTTP port 80) |
+| Catalog API | http://localhost/api/catalog/products | PostgREST |
+| Orders API | http://localhost/api/orders/orders | PostgREST |
+| Checkout/Payment API | http://localhost/api/checkout/transactions | PostgREST (finance) |
+| Seller API (Tier 2) | http://localhost/api/seller/sellers | PostgREST |
+| Internal Ops API (Tier 2) | http://localhost/api/ops/feature_flags | PostgREST |
 | Traefik dashboard | http://localhost:8088 | lab only |
 | Identity (Keycloak) | http://localhost:8081 | admin console — treat as mgmt-only |
 | Search dashboard | http://localhost:5602 | OpenSearch Dashboards |
@@ -37,14 +37,14 @@ First boot of the databases runs the `seed/<db>/01_schema.sql` then
 
 ## Ports & exposure
 
-**Only one port should be public: `8080` (the storefront/API edge).** Everything
-else is either admin (reach via the bastion) or strictly internal.
+**Only one port should be public: `80` (the storefront/API edge — standard HTTP).**
+Everything else is either admin (reach via the bastion) or strictly internal.
 
 ### Host-published ports (in `docker-compose.yml`)
 
 | Host port | → container:port | Service | Purpose | Expose to public? |
 | --- | --- | --- | --- | --- |
-| **8080** | edge (traefik) :80 | Edge / reverse proxy | The single public ingress — storefront + all `/api/*` | ✅ **Yes** (the only one) |
+| **80** | edge (traefik) :80 | Edge / reverse proxy | The single public ingress — storefront + all `/api/*` (HTTP) | ✅ **Yes** (the only one) |
 | 2222 | bastion :2222 | Bastion (SSH) | Controlled admin entry; the only door into `mgmt_net` | ⚠️ Restricted — IP-allowlist / VPN, never open-internet |
 | 8081 | identity (keycloak) :8080 | Identity admin console | Realm/user/role administration | ❌ No — mgmt-only (via bastion) |
 | 8200 | vault :8200 | Secrets/Key mgmt | Vault API + UI | ❌ No — mgmt-only (via bastion) |
@@ -55,8 +55,8 @@ else is either admin (reach via the bastion) or strictly internal.
 > To match the design (single public edge; Tier-0 reachable solely via the bastion
 > on `mgmt_net`), delete the `ports:` entries for `identity`, `vault`, the traefik
 > dashboard, and `search-dashboard` — then reach them by SSH-tunnelling through the
-> bastion. For real exposure, terminate TLS at the edge and publish **443** instead
-> of (or alongside) 8080.
+> bastion. For HTTPS, terminate TLS at the edge and publish **443** alongside
+> (or instead of) port 80.
 
 ### Internal-only ports (never published; reachable only on their Docker network)
 
