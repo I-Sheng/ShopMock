@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ShopMock</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 0; background: #0f1226; color: #e8eaf6; }
+    header { padding: 2rem; background: #161a3b; }
+    h1 { margin: 0; }
+    main { padding: 2rem; max-width: 880px; }
+    code { background: #1f2450; padding: .1rem .35rem; border-radius: 4px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; margin-top: 1rem; }
+    .card { background: #161a3b; padding: 1rem; border-radius: 8px; }
+    a { color: #8ab4ff; }
+    small { color: #9aa0c3; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>ShopMock</h1>
+    <small>Mock e-commerce infrastructure — capstone attack lab target</small>
+  </header>
+  <main>
+    <p>This storefront is the DMZ edge of the ShopMock stack. Business data is
+       reachable only through the service APIs below (the databases sit on a
+       private, <code>internal</code> Docker network).</p>
+    <div class="grid">
+      <div class="card"><strong>Catalog</strong><br><a href="/api/catalog/products">/api/catalog/products</a></div>
+      <div class="card"><strong>Orders</strong><br><a href="/api/orders/orders">/api/orders/orders</a></div>
+      <div class="card"><strong>Checkout / Payment</strong><br><a href="/api/checkout/transactions">/api/checkout/transactions</a></div>
+      <div class="card"><strong>Seller (Tier 2)</strong><br><a href="/api/seller/sellers">/api/seller/sellers</a></div>
+      <div class="card"><strong>Internal Ops (Tier 2)</strong><br><a href="/api/ops/feature_flags">/api/ops/feature_flags</a></div>
+      <div class="card"><strong>Identity (SSO)</strong><br><small>Keycloak — admin via bastion only</small></div>
+    </div>
+    <p><small>See <code>INFRA_BUILD_SPEC.md</code> for the full service/image map and seed-data plan.</small></p>
+  </main>
+</body>
+</html>

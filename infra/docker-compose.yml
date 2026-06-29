@@ -1,0 +1,270 @@
+# ShopMock lab infrastructure — see ../INFRA_BUILD_SPEC.md
+# Every service maps to a real, pullable image (spec §1).
+# Networks realize the tier/blast-radius segmentation (spec §2);
+# the *-db networks are `internal: true` so DBs are unreachable from the edge.
+
+name: shopmock
+
+x-pg-common: &pg-common
+  image: postgres:16-alpine
+  restart: unless-stopped
+  networks: [data_net]
+  environment:
+    POSTGRES_USER: postgres
+    POSTGRES_PASSWORD: ${PG_SUPERUSER_PASSWORD}
+
+x-pgrst-common: &pgrst-common
+  image: postgrest/postgrest:v12.2.0
+  restart: unless-stopped
+
+services:
+  # ---------------- DMZ / Edge ----------------
+  edge:
+    image: traefik:v3.0
+    command:
+      - --api.dashboard=true
+      - --api.insecure=true
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+    ports:
+      - "8080:80"     # public storefront + APIs
+      - "8088:8080"   # traefik dashboard (lab only)
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks: [edge_net, tier1_net, tier2_net]
+
+  storefront:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    volumes:
+      - ./config/edge/storefront.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./config/edge/index.html:/usr/share/nginx/html/index.html:ro
+    networks: [edge_net]
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.storefront.rule: "PathPrefix(`/`)"
+      traefik.http.routers.storefront.priority: "1"
+      traefik.http.services.storefront.loadbalancer.server.port: "80"
+
+  search:
+    image: opensearchproject/opensearch:2.13.0
+    restart: unless-stopped
+    environment:
+      discovery.type: single-node
+      OPENSEARCH_INITIAL_ADMIN_PASSWORD: ${OPENSEARCH_ADMIN_PASSWORD}
+      bootstrap.memory_lock: "true"
+      OPENSEARCH_JAVA_OPTS: -Xms512m -Xmx512m
+    ulimits:
+      memlock: { soft: -1, hard: -1 }
+    networks: [edge_net]
+
+  search-dashboard:
+    image: opensearchproject/opensearch-dashboards:2.13.0
+    restart: unless-stopped
+    environment:
+      OPENSEARCH_HOSTS: '["https://search:9200"]'
+    ports: ["5602:5601"]
+    networks: [edge_net]
+    depends_on: [search]
+
+  # ---------------- Tier 1 — Critical Services ----------------
+  identity:                         # Keycloak — the "key of the kingdom"
+    image: quay.io/keycloak/keycloak:24.0
+    restart: unless-stopped
+    command: ["start-dev", "--import-realm", "--http-port=8080"]
+    environment:
+      KEYCLOAK_ADMIN: ${KC_ADMIN_USER}
+      KEYCLOAK_ADMIN_PASSWORD: ${KC_ADMIN_PASSWORD}
+    volumes:
+      - ./seed/identity:/opt/keycloak/data/import:ro
+    ports:
+      - "8081:8080"                 # admin console (treat as mgmt-only)
+    networks: [tier1_net, mgmt_net]
+
+  catalog-svc:
+    <<: *pgrst-common
+    environment:
+      PGRST_DB_URI: postgres://authenticator:catalog_pgrst_pw@catalog-db:5432/catalog
+      PGRST_DB_SCHEMAS: catalog
+      PGRST_DB_ANON_ROLE: web_anon
+    networks: [tier1_net, data_net]
+    depends_on: [catalog-db]
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.catalog.rule: "PathPrefix(`/api/catalog`)"
+      traefik.http.routers.catalog.middlewares: "catalog-strip"
+      traefik.http.middlewares.catalog-strip.stripprefix.prefixes: "/api/catalog"
+      traefik.http.services.catalog.loadbalancer.server.port: "3000"
+
+  order-svc:
+    <<: *pgrst-common
+    environment:
+      PGRST_DB_URI: postgres://authenticator:orders_pgrst_pw@orders-db:5432/orders
+      PGRST_DB_SCHEMAS: sales
+      PGRST_DB_ANON_ROLE: web_anon
+    networks: [tier1_net, data_net]
+    depends_on: [orders-db]
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.orders.rule: "PathPrefix(`/api/orders`)"
+      traefik.http.routers.orders.middlewares: "orders-strip"
+      traefik.http.middlewares.orders-strip.stripprefix.prefixes: "/api/orders"
+      traefik.http.services.orders.loadbalancer.server.port: "3000"
+
+  checkout-svc:                     # checkout / payment — finance-db (PCI scope)
+    <<: *pgrst-common
+    environment:
+      PGRST_DB_URI: postgres://authenticator:finance_pgrst_pw@finance-db:5432/finance
+      PGRST_DB_SCHEMAS: finance
+      PGRST_DB_ANON_ROLE: web_anon
+    networks: [tier1_net, data_net]
+    depends_on: [finance-db]
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.checkout.rule: "PathPrefix(`/api/checkout`)"
+      traefik.http.routers.checkout.middlewares: "checkout-strip"
+      traefik.http.middlewares.checkout-strip.stripprefix.prefixes: "/api/checkout"
+      traefik.http.services.checkout.loadbalancer.server.port: "3000"
+
+  # ---------------- Tier 2 — Line of Business ----------------
+  seller-svc:
+    <<: *pgrst-common
+    environment:
+      PGRST_DB_URI: postgres://authenticator:catalog_pgrst_pw@catalog-db:5432/catalog
+      PGRST_DB_SCHEMAS: seller
+      PGRST_DB_ANON_ROLE: web_anon
+    networks: [tier2_net, data_net]
+    depends_on: [catalog-db]
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.seller.rule: "PathPrefix(`/api/seller`)"
+      traefik.http.routers.seller.middlewares: "seller-strip"
+      traefik.http.middlewares.seller-strip.stripprefix.prefixes: "/api/seller"
+      traefik.http.services.seller.loadbalancer.server.port: "3000"
+
+  internal-ops-svc:
+    <<: *pgrst-common
+    environment:
+      PGRST_DB_URI: postgres://authenticator:catalog_pgrst_pw@catalog-db:5432/catalog
+      PGRST_DB_SCHEMAS: ops
+      PGRST_DB_ANON_ROLE: web_anon
+    networks: [tier2_net, data_net]
+    depends_on: [catalog-db]
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.ops.rule: "PathPrefix(`/api/ops`)"
+      traefik.http.routers.ops.middlewares: "ops-strip"
+      traefik.http.middlewares.ops-strip.stripprefix.prefixes: "/api/ops"
+      traefik.http.services.ops.loadbalancer.server.port: "3000"
+
+  # ---------------- Data backend (private, internal network only) ----------------
+  customer-db:                      # Customer PII — no public API (strictest isolation)
+    <<: *pg-common
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${PG_SUPERUSER_PASSWORD}
+      POSTGRES_DB: customer
+    volumes:
+      - ./seed/customer-db:/docker-entrypoint-initdb.d:ro
+      - customer-data:/var/lib/postgresql/data
+
+  catalog-db:
+    <<: *pg-common
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${PG_SUPERUSER_PASSWORD}
+      POSTGRES_DB: catalog
+    volumes:
+      - ./seed/catalog-db:/docker-entrypoint-initdb.d:ro
+      - catalog-data:/var/lib/postgresql/data
+
+  orders-db:
+    <<: *pg-common
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${PG_SUPERUSER_PASSWORD}
+      POSTGRES_DB: orders
+    volumes:
+      - ./seed/orders-db:/docker-entrypoint-initdb.d:ro
+      - orders-data:/var/lib/postgresql/data
+
+  finance-db:
+    <<: *pg-common
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${PG_SUPERUSER_PASSWORD}
+      POSTGRES_DB: finance
+    volumes:
+      - ./seed/finance-db:/docker-entrypoint-initdb.d:ro
+      - finance-data:/var/lib/postgresql/data
+
+  # ---------------- SOC / Security Operations ----------------
+  vault:
+    image: hashicorp/vault:1.16
+    restart: unless-stopped
+    cap_add: [IPC_LOCK]
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: ${VAULT_ROOT_TOKEN}
+      VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+    ports: ["8200:8200"]            # treat as mgmt-only
+    networks: [soc_net, mgmt_net]
+
+  vault-seed:                       # one-shot: docker compose run --rm vault-seed
+    image: hashicorp/vault:1.16
+    profiles: ["seed"]
+    environment:
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: ${VAULT_ROOT_TOKEN}
+    entrypoint: ["/bin/sh", "/seed/seed-secrets.sh"]
+    volumes:
+      - ./seed/vault:/seed:ro
+    networks: [soc_net]
+    depends_on: [vault]
+
+  search-seed:                      # one-shot: docker compose run --rm search-seed
+    image: curlimages/curl:8.7.1
+    profiles: ["seed"]
+    environment:
+      OS_URL: https://search:9200
+      OS_AUTH: admin:${OPENSEARCH_ADMIN_PASSWORD}
+    entrypoint: ["/bin/sh", "/seed/index-catalog.sh"]
+    volumes:
+      - ./seed/search:/seed:ro
+    networks: [edge_net]
+    depends_on: [search]
+
+  # ---------------- Tier 0 — Bastion / admin path ----------------
+  bastion:
+    image: lscr.io/linuxserver/openssh-server:latest
+    restart: unless-stopped
+    environment:
+      USER_NAME: ${BASTION_USER}
+      USER_PASSWORD: ${BASTION_PASSWORD}
+      PASSWORD_ACCESS: "true"
+      SUDO_ACCESS: "false"
+    ports: ["2222:2222"]
+    networks: [mgmt_net]            # only path to Keycloak admin + Vault
+
+  # ---------------- SIEM (optional: docker compose --profile siem up) ----------------
+  # Wazuh single-node needs a cert bootstrap; see README. Kept behind a profile
+  # so the core stack stays light. fluent-bit ships logs into it.
+  wazuh:
+    image: wazuh/wazuh-manager:4.8.0
+    profiles: ["siem"]
+    restart: unless-stopped
+    networks: [soc_net]
+
+networks:
+  edge_net:   {}
+  tier1_net:  { internal: true }
+  tier2_net:  { internal: true }
+  data_net:   { internal: true }
+  soc_net:    { internal: true }
+  mgmt_net:   { internal: true }
+
+volumes:
+  customer-data: {}
+  catalog-data: {}
+  orders-data: {}
+  finance-data: {}
