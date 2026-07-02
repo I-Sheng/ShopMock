@@ -1,11 +1,20 @@
 #!/bin/sh
 # Seeds the Secrets/Key-Management node (HashiCorp Vault) with the credentials
-# the rest of the stack uses. Run once after Vault is up (dev mode auto-unseals).
-# Invoked by the `vault-seed` one-shot service in docker-compose.yml.
+# the rest of the stack uses. Runs automatically via the `vault-seed` one-shot
+# service in docker-compose.yml (dev mode auto-unseals).
 set -e
 
 export VAULT_ADDR="${VAULT_ADDR:-http://vault:8200}"
 export VAULT_TOKEN="${VAULT_TOKEN:-lab-root-token}"
+
+# depends_on only orders container start; wait until Vault answers.
+echo "Waiting for Vault at $VAULT_ADDR ..."
+i=0
+until vault status >/dev/null 2>&1; do
+  i=$((i + 1))
+  [ "$i" -ge 60 ] && echo "Vault not ready after 120s, giving up." && exit 1
+  sleep 2
+done
 
 echo "Seeding Vault at $VAULT_ADDR ..."
 

@@ -1,6 +1,6 @@
 #!/bin/sh
 # Mirrors the catalog into the Search service (OpenSearch) index `catalog`.
-# Run once after OpenSearch + catalog-db are up. Invoked by `search-seed` service.
+# Runs automatically via the `search-seed` one-shot service in docker-compose.yml.
 # In a real build this would read from catalog-db; here we bulk-load the same
 # rows as catalog-db/02_seed.sql so search and catalog stay consistent.
 set -e
@@ -8,6 +8,15 @@ set -e
 OS_URL="${OS_URL:-https://opensearch:9200}"
 OS_AUTH="${OS_AUTH:-admin:ShopMockAdmin123!}"
 CURL="curl -sk -u $OS_AUTH"
+
+# depends_on only orders container start; OpenSearch takes a while to come up.
+echo "Waiting for OpenSearch at $OS_URL ..."
+i=0
+until $CURL -f "$OS_URL/_cluster/health" >/dev/null 2>&1; do
+  i=$((i + 1))
+  [ "$i" -ge 90 ] && echo "OpenSearch not ready after 180s, giving up." && exit 1
+  sleep 2
+done
 
 echo "Creating index 'catalog' on $OS_URL ..."
 $CURL -X PUT "$OS_URL/catalog" -H 'Content-Type: application/json' -d '{

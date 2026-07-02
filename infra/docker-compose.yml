@@ -210,9 +210,9 @@ services:
     ports: ["8200:8200"]            # treat as mgmt-only
     networks: [soc_net, mgmt_net]
 
-  vault-seed:                       # one-shot: docker compose run --rm vault-seed
+  vault-seed:                       # one-shot: runs on `up`, waits for Vault, then exits
     image: hashicorp/vault:1.16
-    profiles: ["seed"]
+    restart: "no"
     environment:
       VAULT_ADDR: http://vault:8200
       VAULT_TOKEN: ${VAULT_ROOT_TOKEN}
@@ -222,9 +222,9 @@ services:
     networks: [soc_net]
     depends_on: [vault]
 
-  search-seed:                      # one-shot: docker compose run --rm search-seed
+  search-seed:                      # one-shot: runs on `up`, waits for OpenSearch, then exits
     image: curlimages/curl:8.7.1
-    profiles: ["seed"]
+    restart: "no"
     environment:
       OS_URL: https://search:9200
       OS_AUTH: admin:${OPENSEARCH_ADMIN_PASSWORD}
@@ -243,15 +243,14 @@ services:
       USER_PASSWORD: ${BASTION_PASSWORD}
       PASSWORD_ACCESS: "true"
       SUDO_ACCESS: "false"
-    ports: ["2222:2222"]
+    ports: ["22:2222"]              # public SSH on standard port 22 → container 2222
     networks: [mgmt_net]            # only path to Keycloak admin + Vault
 
-  # ---------------- SIEM (optional: docker compose --profile siem up) ----------------
-  # Wazuh single-node needs a cert bootstrap; see README. Kept behind a profile
-  # so the core stack stays light. fluent-bit ships logs into it.
+  # ---------------- SIEM (on by default) ----------------
+  # Wazuh manager starts with the core stack. The full single-node bundle
+  # (indexer + dashboard) needs a cert bootstrap; see README.
   wazuh:
     image: wazuh/wazuh-manager:4.8.0
-    profiles: ["siem"]
     restart: unless-stopped
     networks: [soc_net]
 

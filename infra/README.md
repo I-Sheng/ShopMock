@@ -10,14 +10,18 @@ rationale, service→image map, and seed-data plan see
 ```bash
 cp .env.example .env          # fake lab secrets
 docker compose pull           # pull every image
-docker compose up -d          # boots stack; Postgres runs all seed/*-db SQL
-docker compose --profile seed run --rm vault-seed    # load secrets into Vault
-docker compose --profile seed run --rm search-seed   # index catalog into OpenSearch
+docker compose up -d          # boots stack (incl. Wazuh) and seeds everything
 ```
 
-First boot of the databases runs the `seed/<db>/01_schema.sql` then
-`02_seed.sql` automatically. To reseed from scratch:
-`docker compose down -v && docker compose up -d`.
+Every component seeds itself on `up`:
+
+- Postgres DBs run `seed/<db>/01_schema.sql` then `02_seed.sql` on first boot.
+- Keycloak imports `seed/identity/realm-shopmock.json` on start.
+- The one-shot `vault-seed` and `search-seed` containers wait for their
+  service to be ready, run `seed/vault/seed-secrets.sh` /
+  `seed/search/index-catalog.sh`, and exit.
+
+To reseed from scratch: `docker compose down -v && docker compose up -d`.
 
 ## Endpoints
 
@@ -33,7 +37,7 @@ First boot of the databases runs the `seed/<db>/01_schema.sql` then
 | Identity (Keycloak) | http://localhost:8081 | admin console — treat as mgmt-only |
 | Search dashboard | http://localhost:5602 | OpenSearch Dashboards |
 | Vault | http://localhost:8200 | dev mode, token in `.env` |
-| Bastion (SSH) | `ssh -p 2222 <BASTION_USER>@localhost` | only path into `mgmt_net` |
+| Bastion (SSH) | `ssh <BASTION_USER>@localhost` (port 22) | only path into `mgmt_net` |
 
 ## Ports & exposure
 
@@ -45,7 +49,7 @@ Everything else is either admin (reach via the bastion) or strictly internal.
 | Host port | → container:port | Service | Purpose | Expose to public? |
 | --- | --- | --- | --- | --- |
 | **80** | edge (traefik) :80 | Edge / reverse proxy | The single public ingress — storefront + all `/api/*` (HTTP) | ✅ **Yes** (the only one) |
-| 2222 | bastion :2222 | Bastion (SSH) | Controlled admin entry; the only door into `mgmt_net` | ⚠️ Restricted — IP-allowlist / VPN, never open-internet |
+| 22 | bastion :2222 | Bastion (SSH) | Controlled admin entry; the only door into `mgmt_net` | ⚠️ Restricted — IP-allowlist / VPN, never open-internet |
 | 8081 | identity (keycloak) :8080 | Identity admin console | Realm/user/role administration | ❌ No — mgmt-only (via bastion) |
 | 8200 | vault :8200 | Secrets/Key mgmt | Vault API + UI | ❌ No — mgmt-only (via bastion) |
 | 8088 | edge (traefik) :8080 | Traefik dashboard | Routing introspection | ❌ No — lab debug only |
@@ -97,7 +101,7 @@ Test logins (lab only): `ada` / `Password123!` (customer),
 
 ## Resource requirements (maximum)
 
-Size the host for the **worst case: the full stack with the SIEM profile on and
+Size the host for the **worst case: the full stack with the SIEM on (default) and
 the log volume at its 20 GB cap.** These are the numbers to provision for.
 
 **Provision for the maximum: 16 GB RAM · 8 vCPU · 50 GB SSD.**
@@ -133,21 +137,19 @@ Maximum storage (~50 GB SSD):
 
 > The 20 GB log cap buys roughly **2–3 weeks** of hot, searchable retention at this
 > lab's ingest (~1–2 GB/day). Higher ingest shrinks the window — that's the dial to
-> watch. Run **core only** (no `siem` profile, logs shipped elsewhere) and the box
-> drops to **8 GB RAM · 4 vCPU · 25 GB**.
+> watch. Run **core only** (Wazuh removed from the compose file, logs shipped
+> elsewhere) and the box drops to **8 GB RAM · 4 vCPU · 25 GB**.
 >
 > This is the all-in-one single-host figure. Production ShopMock (Tier-1 replication
 > + Tier-0 multi-VM per design §4.1) would be 3–4 nodes, ~48–64 GB RAM aggregate.
 
-## Optional: SIEM
+## SIEM (on by default)
 
-```bash
-docker compose --profile siem up -d wazuh
-```
-
-Wazuh single-node needs a one-time certificate bootstrap (see the
-[Wazuh Docker docs](https://documentation.wazuh.com/current/deployment-options/docker/index.html));
-the manager is kept behind the `siem` profile so the core stack stays light.
+The Wazuh manager starts with the core stack — no profile flag needed. Only
+the manager runs by default; the full single-node bundle (indexer + dashboard)
+needs a one-time certificate bootstrap (see the
+[Wazuh Docker docs](https://documentation.wazuh.com/current/deployment-options/docker/index.html))
+before it can be added.
 
 ## All images (pullable)
 
