@@ -47,7 +47,8 @@ can `docker pull` today.
 | Identity service / SSO | **Tier 1 (Tier-0 control plane)** | `quay.io/keycloak/keycloak:24.0` | OIDC/SSO — the "key of the kingdom" |
 | Catalog service | Tier 1 | `postgrest/postgrest:v12.2.0` | REST API over **catalog-db** |
 | Order service | Tier 1 | `postgrest/postgrest:v12.2.0` | REST API over **orders-db** |
-| Checkout / Payment service | Tier 1 | `postgrest/postgrest:v12.2.0` | REST API over **finance-db** (mock PCI scope) |
+| Checkout / Payment service | Tier 1 | `postgrest/postgrest:v12.2.0` | REST API over **finance-db** (mock PCI scope); `record_payment` RPC |
+| Customer service | Tier 1 | `postgrest/postgrest:v12.2.0` | RPC-only over **customer-db**; exposes just `ensure_customer()`, tables not browsable |
 | Seller dashboard service | Tier 2 | `postgrest/postgrest:v12.2.0` | REST API over `seller` schema in **catalog-db** |
 | Internal ops service | Tier 2 | `postgrest/postgrest:v12.2.0` | REST API over `ops` schema (internal tooling) |
 | Catalog DB | Data backend | `postgres:16-alpine` | Products, pricing, inventory |
@@ -121,17 +122,27 @@ import on startup or a one-shot job.
 
 | # | What data | Source file (in repo) | Loaded into (datastore) | How it loads |
 | --- | --- | --- | --- | --- |
-| 1 | Roles + schema for customers, addresses, accounts | `infra/seed/customer-db/01_schema.sql` | **Customer DB** (`postgres`, db `customer`) | initdb |
-| 2 | Customer PII rows (accounts, addresses) | `infra/seed/customer-db/02_seed.sql` | **Customer DB** | initdb |
-| 3 | Catalog + seller/ops schemas | `infra/seed/catalog-db/01_schema.sql` | **Catalog DB** (db `catalog`) | initdb |
-| 4 | Products, categories, pricing, inventory, sellers | `infra/seed/catalog-db/02_seed.sql` | **Catalog DB** | initdb |
-| 5 | Orders schema | `infra/seed/orders-db/01_schema.sql` | **Orders DB** (db `orders`) | initdb |
-| 6 | Orders, line items, shipments | `infra/seed/orders-db/02_seed.sql` | **Orders DB** | initdb |
-| 7 | Finance schema (PCI scope) | `infra/seed/finance-db/01_schema.sql` | **Financial/Wallet DB** (db `finance`) | initdb |
-| 8 | Wallets, tokenized cards, transactions, revenue | `infra/seed/finance-db/02_seed.sql` | **Financial/Wallet DB** | initdb |
-| 9 | Realm, clients, roles, **users** (customers, sellers, employees, global-admin) | `infra/seed/identity/realm-shopmock.json` | **Identity store** (Keycloak) | `--import-realm` on start |
-| 10 | Secrets: DB creds, payment-gateway key, JWT signing key | `infra/seed/vault/seed-secrets.sh` | **Vault** KV (`secret/shopmock/*`) | one-shot job after Vault unseals |
-| 11 | Search index documents (catalog mirror) | `infra/seed/search/index-catalog.sh` | **OpenSearch** index `catalog` | one-shot bulk job |
+| 1 | Roles + schema for customers, addresses, accounts | `seed/customer-db/01_schema.sql` | **Customer DB** (`postgres`, db `customer`) | initdb |
+| 2 | Customer PII rows (accounts, addresses) | `seed/customer-db/02_seed.sql` | **Customer DB** | initdb |
+| 3 | Catalog + seller/ops schemas | `seed/catalog-db/01_schema.sql` | **Catalog DB** (db `catalog`) | initdb |
+| 4 | Products, categories, pricing, inventory, sellers | `seed/catalog-db/02_seed.sql` | **Catalog DB** | initdb |
+| 5 | Orders schema | `seed/orders-db/01_schema.sql` | **Orders DB** (db `orders`) | initdb |
+| 6 | Orders, line items, shipments | `seed/orders-db/02_seed.sql` | **Orders DB** | initdb |
+| 7 | Finance schema (PCI scope) | `seed/finance-db/01_schema.sql` | **Financial/Wallet DB** (db `finance`) | initdb |
+| 8 | Wallets, tokenized cards, transactions, revenue | `seed/finance-db/02_seed.sql` | **Financial/Wallet DB** | initdb |
+| 9 | Realm, clients, roles, **users** (customers, sellers, employees, global-admin) | `seed/identity/realm-shopmock.json` | **Identity store** (Keycloak) | `--import-realm` on start |
+| 10 | Secrets: DB creds, payment-gateway key, JWT signing key | `seed/vault/seed-secrets.sh` | **Vault** KV (`secret/shopmock/*`) | one-shot job after Vault unseals |
+| 11 | Search index documents (catalog mirror) | `seed/search/index-catalog.sh` | **OpenSearch** index `catalog` | one-shot bulk job |
+| 12 | Auth write role `customer` + provisioning RPC `ensure_customer()`; revoke anon PII reads | `seed/customer-db/03_roles.sql`, `04_rpc.sql` | **Customer DB** | initdb |
+| 13 | Auth write role `customer` + checkout RPC `place_order()` | `seed/orders-db/03_roles.sql`, `04_rpc.sql` | **Orders DB** | initdb |
+| 14 | Auth write role `customer` + mock-payment RPC `record_payment()` | `seed/finance-db/03_roles.sql`, `04_rpc.sql` | **Financial DB** | initdb |
+
+> **Login / checkout (added):** the storefront now does real Keycloak OIDC login
+> and self-registration (realm has `registrationAllowed: true`, reached same-origin
+> at `/auth` through the edge). Write endpoints verify the realm's RS256 token
+> against a pinned public JWK (`PGRST_JWT_SECRET`); the token's `role: customer`
+> claim maps to the `customer` DB role. See `PLAN_AUTH_CHECKOUT.md` and the README
+> "Customer login & checkout" section.
 
 **Data ownership / dependency order** (must seed in this order on a clean volume):
 
@@ -157,7 +168,6 @@ volume: `docker compose down -v && docker compose up -d`.
 ## 4. How to Build & Run
 
 ```bash
-cd infra
 cp .env.example .env                 # fake lab secrets; edit if you like
 docker compose pull                  # pulls every image in §1
 docker compose up -d                 # initdb runs all 01_/02_ seed files
@@ -168,7 +178,7 @@ docker compose run --rm search-seed  # loads §3 row 11 into OpenSearch
 Endpoints (default): storefront `http://localhost/` (HTTP port 80), Keycloak admin (via
 bastion / `mgmt_net`) `:8081`, Wazuh dashboard `:5601`, Vault `:8200`.
 
-See `infra/README.md` for the per-service URL/port table and the bastion login.
+See `README.md` for the per-service URL/port table and the bastion login.
 
 ---
 
@@ -185,3 +195,11 @@ See `infra/README.md` for the per-service URL/port table and the bastion login.
 **Known gaps (same honest caveat as design §6d):** no live detection/IR runbook,
 WAF rules are CRS defaults, and PostgREST gives thin business logic. These are
 operational-maturity items, not architectural ones.
+
+**Deliberate checkout weaknesses (attack surface, kept not fixed):** `place_order`
+trusts the browser-supplied `customer_ref` and per-line `unit_price_cents`, so
+IDOR (ordering as another customer) and price tampering are possible by design;
+and `place_order` → `record_payment` is a best-effort cross-DB saga (no atomicity
+between orders-db and finance-db), so a partial failure can leave an order without
+a payment row. These mirror real marketplace bugs and are intended targets for the
+capstone, not defects to engineer away.
