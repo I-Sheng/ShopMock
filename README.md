@@ -28,16 +28,49 @@ To reseed from scratch: `docker compose down -v && docker compose up -d`.
 | Service | URL | Notes |
 | --- | --- | --- |
 | Storefront (edge) | http://localhost/ | links to each API (HTTP port 80) |
+| Login / Sign-up (Keycloak) | http://localhost/auth/realms/shopmock/account | public OIDC login + self-registration, same-origin via the edge |
 | Catalog API | http://localhost/api/catalog/products | PostgREST |
-| Orders API | http://localhost/api/orders/orders | PostgREST |
-| Checkout/Payment API | http://localhost/api/checkout/transactions | PostgREST (finance) |
+| Orders API | http://localhost/api/orders/orders | PostgREST; `POST /api/orders/rpc/place_order` (token) |
+| Checkout/Payment API | http://localhost/api/checkout/transactions | PostgREST (finance); `POST /api/checkout/rpc/record_payment` (token) |
+| Customer API | http://localhost/api/customers/rpc/ensure_customer | PostgREST (customer PII) — **RPC only**, tables not browsable |
 | Seller API (Tier 2) | http://localhost/api/seller/sellers | PostgREST |
 | Internal Ops API (Tier 2) | http://localhost/api/ops/feature_flags | PostgREST |
 | Traefik dashboard | http://localhost:8088 | lab only |
-| Identity (Keycloak) | http://localhost:8081 | admin console — treat as mgmt-only |
+| Identity admin (Keycloak) | http://localhost:8081 | admin console — mgmt-only; `/auth/admin` is blocked at the public edge |
 | Search dashboard | http://localhost:5602 | OpenSearch Dashboards |
 | Vault | http://localhost:8200 | dev mode, token in `.env` |
 | Bastion (SSH) | `ssh <BASTION_USER>@localhost` (port 22) | only path into `mgmt_net` |
+
+## Customer login & checkout
+
+The storefront supports the full customer journey — **sign up / log in** (Keycloak
+OIDC, PKCE) and **check out a cart** (order + mock payment) — all same-origin
+through the edge. See `../PLAN_AUTH_CHECKOUT.md` for the design.
+
+- **Log in:** header → "Account & Lists". Redirects to Keycloak at `/auth`, back
+  to the storefront with a token.
+- **Sign up:** header → "New customer? Start here" (Keycloak self-registration is
+  enabled). A first login provisions a `commerce.customers` row automatically via
+  the `ensure_customer()` RPC — keyed on the user's Keycloak `sub`.
+- **Check out:** add to cart → `/cart` → `/checkout`. Anonymous users are prompted
+  to sign in. Placing an order calls, with the bearer token:
+  `ensure_customer()` → `place_order()` → `record_payment()`, then shows the order id.
+- **Order history:** header → "Returns & Orders" (`/orders`).
+
+How the write path is gated: PostgREST verifies the Keycloak RS256 token against a
+pinned public JWK (`PGRST_JWT_SECRET` in `.env`, matching the realm's signing key).
+Anonymous requests run as `web_anon` (read-only); a valid token's `role: customer`
+claim upgrades the request to the `customer` DB role, which may run the checkout
+RPCs. Customer PII is never browsable — `customer-svc` exposes only the
+`ensure_customer()` RPC, which returns just the caller's own id.
+
+> **Deliberate lab weakness (attack surface, not a bug):** the browser supplies the
+> `customer_ref` and per-line prices to `place_order`, so IDOR and price tampering
+> are possible by design — realistic targets for the capstone.
+
+Test logins (lab only): `ada` / `Password123!` (customer),
+`nwgadgets` / `Seller123!` (seller), `gadmin` / `ChangeMe-Tier0!` (global-admin).
+Or register a fresh customer from the storefront.
 
 ## Ports & exposure
 
@@ -96,8 +129,7 @@ from the public side — matching design §6a.
 | `seed/vault/seed-secrets.sh` | Vault KV (`secret/shopmock/*`) |
 | `seed/search/index-catalog.sh` | OpenSearch index `catalog` |
 
-Test logins (lab only): `ada` / `Password123!` (customer),
-`nwgadgets` / `Seller123!` (seller), `gadmin` / `ChangeMe-Tier0!` (global-admin).
+Test logins are listed under **Customer login & checkout** above.
 
 ## Resource requirements (maximum)
 

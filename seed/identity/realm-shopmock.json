@@ -1,0 +1,262 @@
+{
+  "realm": "shopmock",
+  "enabled": true,
+  "displayName": "ShopMock",
+  "sslRequired": "none",
+  "registrationAllowed": true,
+  "roles": {
+    "realm": [
+      {
+        "name": "customer",
+        "description": "Storefront customer"
+      },
+      {
+        "name": "seller",
+        "description": "Marketplace seller (Tier 2)"
+      },
+      {
+        "name": "employee",
+        "description": "Internal staff (HR/Finance/Legal/IT)"
+      },
+      {
+        "name": "global-admin",
+        "description": "Tier 0 global administrator"
+      }
+    ]
+  },
+  "groups": [
+    {
+      "name": "customers",
+      "realmRoles": [
+        "customer"
+      ]
+    },
+    {
+      "name": "sellers",
+      "realmRoles": [
+        "seller"
+      ]
+    },
+    {
+      "name": "staff",
+      "realmRoles": [
+        "employee"
+      ]
+    }
+  ],
+  "clients": [
+    {
+      "clientId": "storefront",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "redirectUris": [
+        "http://localhost/*"
+      ],
+      "webOrigins": [
+        "http://localhost",
+        "+"
+      ],
+      "protocolMappers": [
+        {
+          "name": "pgrst-role",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-hardcoded-claim-mapper",
+          "consentRequired": false,
+          "config": {
+            "claim.name": "role",
+            "claim.value": "customer",
+            "jsonType.label": "String",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "seller-dashboard",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "redirectUris": [
+        "http://localhost/seller/*"
+      ],
+      "webOrigins": [
+        "http://localhost",
+        "+"
+      ]
+    },
+    {
+      "clientId": "internal-services",
+      "enabled": true,
+      "publicClient": false,
+      "secret": "lab-internal-client-secret",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false
+    }
+  ],
+  "users": [
+    {
+      "id": "cust-1001",
+      "username": "ada",
+      "email": "ada@example.com",
+      "firstName": "Ada",
+      "lastName": "Lovelace",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Password123!",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "customer"
+      ],
+      "groups": [
+        "/customers"
+      ]
+    },
+    {
+      "id": "cust-1002",
+      "username": "grace",
+      "email": "grace@example.com",
+      "firstName": "Grace",
+      "lastName": "Hopper",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Password123!",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "customer"
+      ],
+      "groups": [
+        "/customers"
+      ]
+    },
+    {
+      "id": "cust-1003",
+      "username": "alan",
+      "email": "alan@example.com",
+      "firstName": "Alan",
+      "lastName": "Turing",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Password123!",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "customer"
+      ],
+      "groups": [
+        "/customers"
+      ]
+    },
+    {
+      "id": "sell-2001",
+      "username": "nwgadgets",
+      "email": "sales@nwgadgets.example",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Seller123!",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "seller"
+      ],
+      "groups": [
+        "/sellers"
+      ]
+    },
+    {
+      "id": "emp-3001",
+      "username": "finance.clerk",
+      "email": "clerk@shopmock.example",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Staff123!",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "employee"
+      ],
+      "groups": [
+        "/staff"
+      ]
+    },
+    {
+      "id": "admin-9001",
+      "username": "gadmin",
+      "email": "gadmin@shopmock.example",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "ChangeMe-Tier0!",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "global-admin",
+        "employee"
+      ],
+      "groups": [
+        "/staff"
+      ]
+    }
+  ],
+  "loginWithEmailAllowed": true,
+  "registrationEmailAsUsername": false,
+  "defaultGroups": [
+    "/customers"
+  ],
+  "components": {
+    "org.keycloak.keys.KeyProvider": [
+      {
+        "name": "shopmock-rsa",
+        "providerId": "rsa",
+        "subComponents": {},
+        "config": {
+          "priority": [
+            "1000"
+          ],
+          "enabled": [
+            "true"
+          ],
+          "active": [
+            "true"
+          ],
+          "algorithm": [
+            "RS256"
+          ],
+          "privateKey": [
+            "MIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQC81kaJVBlBdMNrHT7/xAx/KmXy8H6jHXyD8ovaEYZwmnHcOPWYIOS4T+UxzLruvCSRa8RIE1Bc4m0owB3VPwUM0wgpOUZe9URqIJqCnGSl6FLb6lCIsg7VaB7PsZXLeY6B2z4jKxavARk55v9W447Hpu5k6B47KjN4b0RaUAE9ZfHCS7URLRPeLAX3ZzKo50JWLO1J1phrymjUQnSp5M8qXLahmw4UTjX9QMHZbX980Zz09tekEid5fOnW9l7OGqlXzC0PrY66NEuq5j9ymbI4Wuu7UrfeqG+VRHmHtMze++v65kBqZl0dXmjae2h9d1vOf6jv57ECrEz9+JW9k5/PAgMBAAECggEAEbgmYXe1I8gJ5K2Xd8O05UncZYt2ycxYHr/nqsxYlsBagGIOSZQfyI7wRr5oD0OZ4TtnhtipHDSMlNvrvYYIVBSJTRtevkWHG4SrridwTYROiIXYJyHuJzN59xGgdYaWfk2zhI4XUGlqxvaLoMk0xwjW929m4Gf5V6SF/9atOk5PP5aJ0JeYuP0nAyZ9J7rqzVgPY1TD36u1ua2/icXJID7ysaFGtNtzUDeb6tiPeURoVWDt0Q/x6osJBtdp+EAY29ZrrCpCKt9HcmFi9rMu2haH4Og94JakDSxmWyLRcZREn3uWyCvIlt5bsfcrJhyvi54965sg/7KoYzIJN7hiwQKBgQD/91fJMDchtIfZvQutPFmA2hR06+A6s94ji8enPs3Q8c4nefTQu8wV9I3M4B6nWBD9o7YlkM/onWbsrjxioESmqaFPd1SC9PRwVHwN7r/DbG0y7DIEmTsfLuq8tRtHpXZ9k3VwW5LfcIc9JZx3rMwEewdfQ+bTRkfQD8pNfX07WQKBgQC83KmH32/HtdXcWtT/a55EwRSCjL8mSL3a0oJYR0RuTQB3WjzjZ83y7Bp0/PwW+hAd0+GMl9TJsje+I2m5dC+Mn75zlYDYiWkOUmrFLUYrY27SglN4qB2PYis7oFz8GYuzUXw1Pgr5r1lHVaNqSMzO54bxkz+3jYyuX/FamAHXZwKBgDr1xorZSFnDM+e73Ayzcgp0MXIdQzFCbVDSydKEbPRMPqhpNzM9ju0fv+oJVgZGCuPh6fsNOFbkquip2c7+C9I4EKg1XIot0oBtdYXgENv7BcxNC9hzU2MDc560OOxv+LNEXDDdZx+A1CYJm9kVPIlrrW8MPQc9kR0kBf2Dgm1BAoGANw5YuYxQSLbgdlFgYGleBQsIUJp5Ks7v0bemWdfEwibeaOy8bUqYhiV//PS3BHe3dQqMaPDmDjpO97XZH0AYkHUNDyLZIcbFAnDSQVLWbtWYu/NUJAtWOrNSiRpRoQhNamPpwpeomWsdqqbzcYtxcSubchcL7xVrmnXLpS5E8ycCgYAZh9fH9KcovPt5v5HFTb/V8KBTVe4MY51ji13XCeyiw0OuMSGs53z9lLTtiWHrbCHNFAFskuk2PbwHSY8FzPsHoFg4VxzO9fMkxUN/8ZwlLYFFqbWiiEum1ldy+BNWGJ1b7EiugLDYsMlcFDUve3UfkImga1v4xxpV+S0sKKsxLQ=="
+          ],
+          "certificate": [
+            "MIIDEzCCAfugAwIBAgIUW/jsHFfMUnL8FCS9yPnfGssSUDIwDQYJKoZIhvcNAQELBQAwGTEXMBUGA1UEAwwOc2hvcG1vY2stcmVhbG0wHhcNMjYwNzAzMDcxMjAwWhcNMzYwNjMwMDcxMjAwWjAZMRcwFQYDVQQDDA5zaG9wbW9jay1yZWFsbTCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBALzWRolUGUF0w2sdPv/EDH8qZfLwfqMdfIPyi9oRhnCacdw49Zgg5LhP5THMuu68JJFrxEgTUFzibSjAHdU/BQzTCCk5Rl71RGogmoKcZKXoUtvqUIiyDtVoHs+xlct5joHbPiMrFq8BGTnm/1bjjsem7mToHjsqM3hvRFpQAT1l8cJLtREtE94sBfdnMqjnQlYs7UnWmGvKaNRCdKnkzypctqGbDhRONf1Awdltf3zRnPT216QSJ3l86db2Xs4aqVfMLQ+tjro0S6rmP3KZsjha67tSt96ob5VEeYe0zN776/rmQGpmXR1eaNp7aH13W85/qO/nsQKsTP34lb2Tn88CAwEAAaNTMFEwHQYDVR0OBBYEFCnBJCwQ2rr2JjCv6uf5gQAX/vLeMB8GA1UdIwQYMBaAFCnBJCwQ2rr2JjCv6uf5gQAX/vLeMA8GA1UdEwEB/wQFMAMBAf8wDQYJKoZIhvcNAQELBQADggEBAKBJTT/nHrs3V/wR9vfnq1mcV91yg6+ArC1JrrzpOrP1Zs0taTq5n3cG1vUqVgvwYrMTURx7xnMF/3M68aHjDguGsmOk1+UQoeCYwwt1K5YRe+IakkRMpsLYQHQnsaj9/nnMXpgjox1wFgORrZFHAkr2jJftS91Z/eGOxJ4PEqkktceirJGlLZHe2+a14SXea+Y8g4TwGn30f9yZfUkG1LLCDnq67vjPWLNbtJ6Ur7VkW3DtlOf+RzTqiRBcUKKA7P6CuipI6F2+PajGxqEoxkDzHUnmWWCMA/T46JqTFYI1WGI9biUFK/q8SFprlRc8Ip7sckuQ/K+4MVmdiHhV4eg="
+          ]
+        }
+      }
+    ]
+  }
+}
