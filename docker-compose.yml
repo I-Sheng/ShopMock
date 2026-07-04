@@ -202,6 +202,23 @@ services:
       traefik.http.middlewares.ops-strip.stripprefix.prefixes: "/api/ops"
       traefik.http.services.ops.loadbalancer.server.port: "3000"
 
+  internal-service-backend:         # Django — owns all checkout SQL (parameterized)
+    build: ./internal-service-backend
+    restart: unless-stopped
+    environment:
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY}
+      INTERNAL_BACKEND_DB_PASSWORD: ${INTERNAL_BACKEND_DB_PASSWORD}
+      PGRST_JWT_SECRET: ${PGRST_JWT_SECRET}   # same pinned realm JWK as PostgREST
+    networks: [tier2_net, data_net]
+    depends_on: [customer-db, orders-db, finance-db]
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: shopmock_tier2_net
+      traefik.http.routers.internal-backend.rule: "PathPrefix(`/api/internal`)"
+      traefik.http.routers.internal-backend.middlewares: "internal-backend-strip"
+      traefik.http.middlewares.internal-backend-strip.stripprefix.prefixes: "/api/internal"
+      traefik.http.services.internal-backend.loadbalancer.server.port: "8000"
+
   # ---------------- Data backend (private, internal network only) ----------------
   customer-db:                      # Customer PII — no public API (strictest isolation)
     <<: *pg-common
@@ -209,6 +226,7 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${PG_SUPERUSER_PASSWORD}
       POSTGRES_DB: customer
+      INTERNAL_BACKEND_DB_PASSWORD: ${INTERNAL_BACKEND_DB_PASSWORD}  # for 05 init script
     volumes:
       - ./seed/customer-db:/docker-entrypoint-initdb.d:ro
       - customer-data:/var/lib/postgresql/data
@@ -229,6 +247,7 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${PG_SUPERUSER_PASSWORD}
       POSTGRES_DB: orders
+      INTERNAL_BACKEND_DB_PASSWORD: ${INTERNAL_BACKEND_DB_PASSWORD}  # for 05 init script
     volumes:
       - ./seed/orders-db:/docker-entrypoint-initdb.d:ro
       - orders-data:/var/lib/postgresql/data
@@ -239,6 +258,7 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${PG_SUPERUSER_PASSWORD}
       POSTGRES_DB: finance
+      INTERNAL_BACKEND_DB_PASSWORD: ${INTERNAL_BACKEND_DB_PASSWORD}  # for 05 init script
     volumes:
       - ./seed/finance-db:/docker-entrypoint-initdb.d:ro
       - finance-data:/var/lib/postgresql/data

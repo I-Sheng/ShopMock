@@ -229,6 +229,19 @@ a { color: inherit; text-decoration: none; }
 .co-block h3 { font-size: 15px; margin-bottom: 6px; }
 .co-line { display: flex; justify-content: space-between; font-size: 14px; padding: 3px 0; color: #333; }
 .co-error { color: #b12704; font-size: 13px; margin-bottom: 10px; word-break: break-word; }
+.co-hint { font-size: 13px; color: #565959; margin-bottom: 10px; }
+.co-form { display: flex; flex-wrap: wrap; gap: 8px; }
+.co-input {
+  flex: 1 1 160px;
+  height: 36px;
+  padding: 0 10px;
+  font-size: 14px;
+  border: 1px solid #a6a6a6;
+  border-radius: 6px;
+  outline: none;
+}
+.co-input:focus { border-color: #e77600; box-shadow: 0 0 0 2px #fde9d1; }
+.co-wide { flex-basis: 100%; }
 
 .signin-gate, .confirm {
   background: #fff; border-radius: 8px; padding: 40px; text-align: center; max-width: 560px; margin: 0 auto;
