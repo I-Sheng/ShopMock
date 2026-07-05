@@ -3,11 +3,14 @@
 import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import Keycloak from 'keycloak-js';
 
-// Same-origin as the storefront: the edge routes /auth -> Keycloak, so there is
-// no CORS and the realm is reached at http://<host>/auth.
-const AuthContext = createContext(null);
+// Seller Central signs in through the `seller-dashboard` Keycloak client, which
+// stamps `role: seller` into the token — the customer storefront uses the
+// `storefront` client (`role: customer`). Same realm, same edge-routed /auth,
+// different client and different landing page. The customer AuthProvider skips
+// initialization under /seller so this instance owns the OIDC callback here.
+const SellerAuthContext = createContext(null);
 
-export function AuthProvider({ children }) {
+export function SellerAuthProvider({ children }) {
   const kcRef = useRef(null);
   const [ready, setReady] = useState(false);
   const [authenticated, setAuthenticated] = useState(false);
@@ -15,17 +18,10 @@ export function AuthProvider({ children }) {
 
   useEffect(() => {
     if (kcRef.current) return; // guard StrictMode double-invoke
-    // Seller Central owns its own Keycloak client (seller-dashboard) and the
-    // OIDC redirect callback under /seller — a second keycloak-js instance here
-    // would consume that callback code and fail the exchange (wrong client_id).
-    if (window.location.pathname.startsWith('/seller')) {
-      setReady(true);
-      return;
-    }
     const kc = new Keycloak({
       url: `${window.location.origin}/auth`,
       realm: 'shopmock',
-      clientId: 'storefront',
+      clientId: 'seller-dashboard',
     });
     kcRef.current = kc;
 
@@ -46,10 +42,10 @@ export function AuthProvider({ children }) {
       .catch(() => setReady(true));
   }, []);
 
-  const login = () => kcRef.current?.login();
-  const register = () => kcRef.current?.register();
+  const login = () =>
+    kcRef.current?.login({ redirectUri: window.location.origin + '/seller' });
   const logout = () =>
-    kcRef.current?.logout({ redirectUri: window.location.origin + '/' });
+    kcRef.current?.logout({ redirectUri: window.location.origin + '/seller' });
 
   // Ensure a fresh token, then issue a same-origin API call with the bearer.
   const authFetch = async (path, opts = {}) => {
@@ -67,12 +63,12 @@ export function AuthProvider({ children }) {
   };
 
   return (
-    <AuthContext.Provider
-      value={{ ready, authenticated, profile, login, register, logout, authFetch }}
+    <SellerAuthContext.Provider
+      value={{ ready, authenticated, profile, login, logout, authFetch }}
     >
       {children}
-    </AuthContext.Provider>
+    </SellerAuthContext.Provider>
   );
 }
 
-export const useAuth = () => useContext(AuthContext);
+export const useSellerAuth = () => useContext(SellerAuthContext);

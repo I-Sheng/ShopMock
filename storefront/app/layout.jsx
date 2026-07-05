@@ -27,7 +27,7 @@ export default function RootLayout({ children }) {
               </div>
               <div>
                 <h4>Make Money with Us</h4>
-                <span>Sell on ShopMock</span>
+                <span><a href="/seller">Sell on ShopMock</a></span>
                 <span>Become an Affiliate</span>
                 <span>Advertise Your Products</span>
               </div>

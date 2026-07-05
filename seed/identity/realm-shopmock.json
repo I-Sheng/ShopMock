@@ -79,12 +79,30 @@
       "enabled": true,
       "publicClient": true,
       "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
       "redirectUris": [
-        "http://localhost/seller/*"
+        "http://localhost/seller/*",
+        "http://localhost/silent-check-sso.html"
       ],
       "webOrigins": [
         "http://localhost",
         "+"
+      ],
+      "protocolMappers": [
+        {
+          "name": "pgrst-role",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-hardcoded-claim-mapper",
+          "consentRequired": false,
+          "config": {
+            "claim.name": "role",
+            "claim.value": "seller",
+            "jsonType.label": "String",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        }
       ]
     },
     {
@@ -181,7 +199,9 @@
       ],
       "groups": [
         "/sellers"
-      ]
+      ],
+      "firstName": "NW",
+      "lastName": "Gadgets"
     },
     {
       "id": "emp-3001",

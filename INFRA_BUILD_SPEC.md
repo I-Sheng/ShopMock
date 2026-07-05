@@ -49,8 +49,10 @@ can `docker pull` today.
 | Order service | Tier 1 | `postgrest/postgrest:v12.2.0` | REST API over **orders-db** |
 | Checkout / Payment service | Tier 1 | `postgrest/postgrest:v12.2.0` | REST API over **finance-db** (mock PCI scope); `record_payment` RPC |
 | Customer service | Tier 1 | `postgrest/postgrest:v12.2.0` | RPC-only over **customer-db**; exposes just `ensure_customer()`, tables not browsable |
-| Seller dashboard service | Tier 2 | `postgrest/postgrest:v12.2.0` | REST API over `seller` schema in **catalog-db** |
+| Seller dashboard service | Tier 2 | `postgrest/postgrest:v12.2.0` | REST API over `seller` schema in **catalog-db** (read-only browse) |
+| Seller backend | Tier 2 | built from `./seller-backend` (Django) | Seller write paths: own listings in **catalog-db**, own-sales reads from **orders-db**; JWT `role: seller` |
 | Internal ops service | Tier 2 | `postgrest/postgrest:v12.2.0` | REST API over `ops` schema (internal tooling) |
+| Internal service backend | Tier 2 | built from `./internal-service-backend` (Django) | Checkout orchestration over **customer-db / orders-db / finance-db** (PII + finance scope); JWT `role: customer` |
 | Catalog DB | Data backend | `postgres:16-alpine` | Products, pricing, inventory |
 | Orders DB | Data backend | `postgres:16-alpine` | Orders, items, shipments |
 | Customer DB | Data backend | `postgres:16-alpine` | Customer PII, accounts, addresses |
@@ -136,6 +138,8 @@ import on startup or a one-shot job.
 | 12 | Auth write role `customer` + provisioning RPC `ensure_customer()`; revoke anon PII reads | `seed/customer-db/03_roles.sql`, `04_rpc.sql` | **Customer DB** | initdb |
 | 13 | Auth write role `customer` + checkout RPC `place_order()` | `seed/orders-db/03_roles.sql`, `04_rpc.sql` | **Orders DB** | initdb |
 | 14 | Auth write role `customer` + mock-payment RPC `record_payment()` | `seed/finance-db/03_roles.sql`, `04_rpc.sql` | **Financial DB** | initdb |
+| 15 | Login role `internal_backend` (checkout Django service, least privilege) | `seed/customer-db/05_internal_backend_role.sh`, `seed/orders-db/05_…`, `seed/finance-db/05_…` | Customer / Orders / Financial DBs | initdb |
+| 16 | Login role `seller_backend` (seller Django service; RW catalog/seller, RO sales) | `seed/catalog-db/05_seller_backend_role.sh`, `seed/orders-db/06_seller_backend_role.sh` | Catalog / Orders DBs | initdb |
 
 > **Login / checkout (added):** the storefront now does real Keycloak OIDC login
 > and self-registration (realm has `registrationAllowed: true`, reached same-origin
