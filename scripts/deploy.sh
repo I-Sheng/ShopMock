@@ -62,9 +62,17 @@ fi
 # mount /var/run/docker.sock (the edge's Docker-provider socket), and services
 # must join sandboxnet. Honor an explicit COMPOSE_FILE (caller env or .env);
 # otherwise switch it on automatically when the podman branch above fired.
-if [ -n "${DOCKER_SOCK:-}" ] && [ -z "${COMPOSE_FILE:-}" ] && ! grep -q '^COMPOSE_FILE=' .env; then
-  export COMPOSE_FILE=docker-compose.yml:docker-compose.vm.yml
-  echo "deploy: podman host detected — using vm override (COMPOSE_FILE=$COMPOSE_FILE)"
+if [ -n "${DOCKER_SOCK:-}" ]; then
+  effective="${COMPOSE_FILE:-$(grep '^COMPOSE_FILE=' .env | cut -d= -f2- || true)}"
+  if [ -z "$effective" ]; then
+    export COMPOSE_FILE=docker-compose.yml:docker-compose.vm.yml
+    echo "deploy: podman host detected — using vm override (COMPOSE_FILE=$COMPOSE_FILE)"
+  elif ! printf '%s' "$effective" | grep -q 'docker-compose\.vm\.yml'; then
+    echo "deploy: ERROR: podman host, but COMPOSE_FILE ($effective) does not include docker-compose.vm.yml —" >&2
+    echo "        the edge would try to bind /var/run/docker.sock and fail (rootless podman cannot create it)." >&2
+    echo "        Fix the COMPOSE_FILE line in .env (or unset it) and re-run." >&2
+    exit 1
+  fi
 fi
 
 # New compose variables can land in the repo before the runner's canonical
