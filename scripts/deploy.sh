@@ -87,6 +87,14 @@ for var in SELLER_BACKEND_DB_PASSWORD; do
   fi
 done
 
+# Rootless podman maps in-container service users (postgres uid 70, keycloak,
+# vault, …) to unprivileged subuids, so bind-mounted seed/ files must be world-
+# readable for them. Checkouts made under a restrictive umask (NETID homes use
+# 077) aren't, which crash-loops the DBs with "can't open
+# /docker-entrypoint-initdb.d/: Permission denied". All fake lab data — safe
+# to open up, and a no-op on dev machines.
+chmod -R a+rX seed/
+
 "${COMPOSE[@]}" up -d --build
 
 echo "deploy: waiting for databases..."

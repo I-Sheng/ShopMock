@@ -143,6 +143,7 @@ volumes**. After changing anything under `seed/`, reseed with
 | Symptom | Cause → fix |
 | --- | --- |
 | `mkdir /var/run/docker.sock: permission denied` | vm override not active — the edge tried to bind the docker socket path from the base file. `git pull`; remove/fix any stale `COMPOSE_FILE` line in `.env`; confirm the run prints the "using vm override" line. No sudo is ever needed. |
+| DB crash-loops with `ls: can't open '/docker-entrypoint-initdb.d/': Permission denied` | checkout made under a restrictive umask (NETID homes: 077) — in rootless podman the container's postgres user is an unprivileged subuid and needs world-read on the bind-mounted `seed/` files. deploy.sh now runs `chmod -R a+rX seed/` automatically; then `podman compose down -v` once (the crash loop leaves a half-initialized, unseeded data volume) and redeploy. |
 | `WARN: The "SELLER_BACKEND_DB_PASSWORD" variable is not set` | `.env` predates the seller backend. Current deploy.sh auto-generates it; add it to the canonical env file to silence permanently. |
 | `can only create exec sessions on running containers` / `service "X" is not running` | containers were created by an earlier failed `up` but never started. `podman compose down` (keeps volumes), then re-run the deploy. |
 | `network sandboxnet declared as external, but could not be found` | one-time setup step 2 was skipped — create the network. |
