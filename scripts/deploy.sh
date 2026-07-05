@@ -54,14 +54,33 @@ if [ ! -f .env ]; then
   exit 1
 fi
 
+# New compose variables can land in the repo before the runner's canonical
+# .env learns about them. A missing var would interpolate to a blank string
+# (services then disagree with the DB role password), so generate a lab value
+# instead. The role scripts below ALTER the password on every deploy, so the
+# DB side re-syncs to whatever .env now holds.
+for var in SELLER_BACKEND_DB_PASSWORD; do
+  if ! grep -q "^${var}=" .env; then
+    echo "deploy: ${var} missing from .env — generating a lab value (add it to the canonical env file too)" >&2
+    echo "${var}=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')" >> .env
+  fi
+done
+
 "${COMPOSE[@]}" up -d --build
 
 echo "deploy: waiting for databases..."
-for db in customer-db orders-db finance-db; do
+for db in customer-db orders-db finance-db catalog-db; do
+  ready=
   for _ in $(seq 1 60); do
-    "${COMPOSE[@]}" exec -T "$db" pg_isready -U postgres >/dev/null 2>&1 && break
+    "${COMPOSE[@]}" exec -T "$db" pg_isready -U postgres >/dev/null 2>&1 && { ready=1; break; }
     sleep 2
   done
+  if [ -z "$ready" ]; then
+    echo "deploy: $db never became ready — aborting" >&2
+    "${COMPOSE[@]}" ps "$db" >&2 || true
+    "${COMPOSE[@]}" logs --tail 25 "$db" >&2 || true
+    exit 1
+  fi
 done
 
 echo "deploy: applying RPC functions..."
@@ -75,6 +94,13 @@ for db in customer-db orders-db finance-db; do
   "${COMPOSE[@]}" exec -T -e INTERNAL_BACKEND_DB_PASSWORD="$pw" "$db" \
     sh /docker-entrypoint-initdb.d/05_internal_backend_role.sh
 done
+
+echo "deploy: ensuring seller_backend role..."
+pw=$(grep '^SELLER_BACKEND_DB_PASSWORD=' .env | cut -d= -f2-)
+"${COMPOSE[@]}" exec -T -e SELLER_BACKEND_DB_PASSWORD="$pw" catalog-db \
+  sh /docker-entrypoint-initdb.d/05_seller_backend_role.sh
+"${COMPOSE[@]}" exec -T -e SELLER_BACKEND_DB_PASSWORD="$pw" orders-db \
+  sh /docker-entrypoint-initdb.d/06_seller_backend_role.sh
 
 echo "deploy: reloading PostgREST schema caches..."
 "${COMPOSE[@]}" exec -T customer-db psql -U postgres -d customer -c "NOTIFY pgrst, 'reload schema';"
