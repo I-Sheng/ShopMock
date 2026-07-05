@@ -219,6 +219,23 @@ services:
       traefik.http.middlewares.internal-backend-strip.stripprefix.prefixes: "/api/internal"
       traefik.http.services.internal-backend.loadbalancer.server.port: "8000"
 
+  seller-backend:                   # Django — sellers manage own listings (catalog-db) + read own sales (orders-db)
+    build: ./seller-backend
+    restart: unless-stopped
+    environment:
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY}
+      SELLER_BACKEND_DB_PASSWORD: ${SELLER_BACKEND_DB_PASSWORD}
+      PGRST_JWT_SECRET: ${PGRST_JWT_SECRET}   # same pinned realm JWK as PostgREST
+    networks: [tier2_net, data_net]
+    depends_on: [catalog-db, orders-db]
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: shopmock_tier2_net
+      traefik.http.routers.seller-backend.rule: "PathPrefix(`/api/seller-backend`)"
+      traefik.http.routers.seller-backend.middlewares: "seller-backend-strip"
+      traefik.http.middlewares.seller-backend-strip.stripprefix.prefixes: "/api/seller-backend"
+      traefik.http.services.seller-backend.loadbalancer.server.port: "8000"
+
   # ---------------- Data backend (private, internal network only) ----------------
   customer-db:                      # Customer PII — no public API (strictest isolation)
     <<: *pg-common
@@ -237,6 +254,7 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${PG_SUPERUSER_PASSWORD}
       POSTGRES_DB: catalog
+      SELLER_BACKEND_DB_PASSWORD: ${SELLER_BACKEND_DB_PASSWORD}    # for 05 init script
     volumes:
       - ./seed/catalog-db:/docker-entrypoint-initdb.d:ro
       - catalog-data:/var/lib/postgresql/data
@@ -248,6 +266,7 @@ services:
       POSTGRES_PASSWORD: ${PG_SUPERUSER_PASSWORD}
       POSTGRES_DB: orders
       INTERNAL_BACKEND_DB_PASSWORD: ${INTERNAL_BACKEND_DB_PASSWORD}  # for 05 init script
+      SELLER_BACKEND_DB_PASSWORD: ${SELLER_BACKEND_DB_PASSWORD}      # for 06 init script
     volumes:
       - ./seed/orders-db:/docker-entrypoint-initdb.d:ro
       - orders-data:/var/lib/postgresql/data

@@ -28,12 +28,14 @@ To reseed from scratch: `docker compose down -v && docker compose up -d`.
 | Service | URL | Notes |
 | --- | --- | --- |
 | Storefront (edge) | http://localhost/ | links to each API (HTTP port 80) |
+| Seller Central (UI) | http://localhost/seller | seller login, listings manager, sales dashboard |
 | Login / Sign-up (Keycloak) | http://localhost/auth/realms/shopmock/account | public OIDC login + self-registration, same-origin via the edge |
 | Catalog API | http://localhost/api/catalog/products | PostgREST |
 | Orders API | http://localhost/api/orders/orders | PostgREST; `POST /api/orders/rpc/place_order` (token) |
 | Checkout/Payment API | http://localhost/api/checkout/transactions | PostgREST (finance); `POST /api/checkout/rpc/record_payment` (token) |
 | Customer API | http://localhost/api/customers/rpc/ensure_customer | PostgREST (customer PII) — **RPC only**, tables not browsable |
-| Seller API (Tier 2) | http://localhost/api/seller/sellers | PostgREST |
+| Seller API (Tier 2) | http://localhost/api/seller/sellers | PostgREST (read-only browse) |
+| Seller Backend API (Tier 2) | http://localhost/api/seller-backend/listings | Django; seller token required (see below) |
 | Internal Ops API (Tier 2) | http://localhost/api/ops/feature_flags | PostgREST |
 | Traefik dashboard | http://localhost:8088 | lab only |
 | Identity admin (Keycloak) | http://localhost:8081 | admin console — mgmt-only; `/auth/admin` is blocked at the public edge |
@@ -71,6 +73,43 @@ RPCs. Customer PII is never browsable — `customer-svc` exposes only the
 Test logins (lab only): `ada` / `Password123!` (customer),
 `nwgadgets` / `Seller123!` (seller), `gadmin` / `ChangeMe-Tier0!` (global-admin).
 Or register a fresh customer from the storefront.
+
+## Seller backend (Tier 2)
+
+`seller-backend` is a Django service (like `internal-service-backend`) that owns
+all seller write paths. Data boundary: it connects **only** to catalog-db
+(`seller` + `catalog` schemas) and orders-db (read-only) — customer PII and
+finance data stay with `internal-service-backend`.
+
+Auth: a token from the `seller-dashboard` client (which stamps `role: seller`)
+verified against the same pinned realm JWK. Ownership is always derived from
+the verified `sub` claim → the caller's `seller.sellers` row.
+
+Two login doors, two roles: customers sign in from the storefront header
+(`storefront` client → `role: customer`); sellers sign in at **Seller Central**
+(`http://localhost/seller`, `seller-dashboard` client → `role: seller`). Same
+Keycloak realm behind both — only the client (and therefore the stamped role
+claim and landing page) differs. Seller Central lets a seller add products
+(SKU, price, stock, category), edit or deactivate their listings, and see
+per-order sale lines with unit/gross totals. Try it with `nwgadgets` /
+`Seller123!`.
+
+| Endpoint | Method | What it does |
+| --- | --- | --- |
+| `/api/seller-backend/healthz` | GET | liveness, no auth |
+| `/api/seller-backend/sellers/ensure` | POST | idempotent seller provisioning keyed on Keycloak `sub` |
+| `/api/seller-backend/listings` | GET / POST | own listings; create product + inventory + listing atomically |
+| `/api/seller-backend/listings/<id>` | PATCH | update own `name`, `description`, `price_cents`, `active`, `qty` (commission is platform-set) |
+| `/api/seller-backend/sales` | GET | order lines for own SKUs from orders-db, with unit/gross totals |
+
+Smoke test (after a fresh `docker compose up`, realm import needs fresh volumes):
+
+```bash
+TOKEN=$(curl -s http://localhost/auth/realms/shopmock/protocol/openid-connect/token \
+  -d grant_type=password -d client_id=seller-dashboard \
+  -d username=nwgadgets -d password='Seller123!' | jq -r .access_token)
+curl -s -H "Authorization: Bearer $TOKEN" http://localhost/api/seller-backend/listings | jq
+```
 
 ## Ports & exposure
 
