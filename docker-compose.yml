@@ -79,7 +79,7 @@ services:
       KEYCLOAK_ADMIN_PASSWORD: ${KC_ADMIN_PASSWORD}
       KC_HTTP_RELATIVE_PATH: /auth   # serve the whole server under /auth (public login flow)
     volumes:
-      - ./seed/identity:/opt/keycloak/data/import:ro
+      - ./seed/identity:/opt/keycloak/data/import:ro,z
     ports:
       - "8081:8080"                 # admin console (treat as mgmt-only)
     networks: [tier1_net, mgmt_net]
@@ -245,7 +245,7 @@ services:
       POSTGRES_DB: customer
       INTERNAL_BACKEND_DB_PASSWORD: ${INTERNAL_BACKEND_DB_PASSWORD}  # for 05 init script
     volumes:
-      - ./seed/customer-db:/docker-entrypoint-initdb.d:ro
+      - ./seed/customer-db:/docker-entrypoint-initdb.d:ro,z
       - customer-data:/var/lib/postgresql/data
 
   catalog-db:
@@ -256,7 +256,7 @@ services:
       POSTGRES_DB: catalog
       SELLER_BACKEND_DB_PASSWORD: ${SELLER_BACKEND_DB_PASSWORD}    # for 05 init script
     volumes:
-      - ./seed/catalog-db:/docker-entrypoint-initdb.d:ro
+      - ./seed/catalog-db:/docker-entrypoint-initdb.d:ro,z
       - catalog-data:/var/lib/postgresql/data
 
   orders-db:
@@ -268,7 +268,7 @@ services:
       INTERNAL_BACKEND_DB_PASSWORD: ${INTERNAL_BACKEND_DB_PASSWORD}  # for 05 init script
       SELLER_BACKEND_DB_PASSWORD: ${SELLER_BACKEND_DB_PASSWORD}      # for 06 init script
     volumes:
-      - ./seed/orders-db:/docker-entrypoint-initdb.d:ro
+      - ./seed/orders-db:/docker-entrypoint-initdb.d:ro,z
       - orders-data:/var/lib/postgresql/data
 
   finance-db:
@@ -279,7 +279,7 @@ services:
       POSTGRES_DB: finance
       INTERNAL_BACKEND_DB_PASSWORD: ${INTERNAL_BACKEND_DB_PASSWORD}  # for 05 init script
     volumes:
-      - ./seed/finance-db:/docker-entrypoint-initdb.d:ro
+      - ./seed/finance-db:/docker-entrypoint-initdb.d:ro,z
       - finance-data:/var/lib/postgresql/data
 
   # ---------------- SOC / Security Operations ----------------
@@ -301,7 +301,7 @@ services:
       VAULT_TOKEN: ${VAULT_ROOT_TOKEN}
     entrypoint: ["/bin/sh", "/seed/seed-secrets.sh"]
     volumes:
-      - ./seed/vault:/seed:ro
+      - ./seed/vault:/seed:ro,z
     networks: [soc_net]
     depends_on: [vault]
 
@@ -313,7 +313,7 @@ services:
       OS_AUTH: admin:${OPENSEARCH_ADMIN_PASSWORD}
     entrypoint: ["/bin/sh", "/seed/index-catalog.sh"]
     volumes:
-      - ./seed/search:/seed:ro
+      - ./seed/search:/seed:ro,z
     networks: [edge_net]
     depends_on: [search]
 
