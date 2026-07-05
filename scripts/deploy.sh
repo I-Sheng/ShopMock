@@ -87,6 +87,23 @@ for var in SELLER_BACKEND_DB_PASSWORD; do
   fi
 done
 
+# Rootless podman maps in-container service users (postgres uid 70, keycloak,
+# vault, …) to unprivileged subuids, so bind-mounted seed/ files must be world-
+# readable for them. Checkouts made under a restrictive umask (NETID homes use
+# 077) aren't, which crash-loops the DBs with "can't open
+# /docker-entrypoint-initdb.d/: Permission denied". All fake lab data — safe
+# to open up, and a no-op on dev machines.
+chmod -R a+rX seed/
+
+# SELinux-enforcing hosts additionally need a container-readable label on the
+# bind-mounted files (user_home_t is denied to containers). The mounts carry
+# the `z` flag, but docker-compose over the podman API socket has been seen
+# dropping it — relabel explicitly; chcon on your own files needs no sudo.
+if command -v getenforce >/dev/null 2>&1 && [ "$(getenforce)" = "Enforcing" ]; then
+  chcon -R -t container_file_t seed/ \
+    || echo "deploy: warning: could not relabel seed/ for SELinux (chcon failed)" >&2
+fi
+
 "${COMPOSE[@]}" up -d --build
 
 echo "deploy: waiting for databases..."

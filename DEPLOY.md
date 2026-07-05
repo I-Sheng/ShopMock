@@ -143,6 +143,7 @@ volumes**. After changing anything under `seed/`, reseed with
 | Symptom | Cause → fix |
 | --- | --- |
 | `mkdir /var/run/docker.sock: permission denied` | vm override not active — the edge tried to bind the docker socket path from the base file. `git pull`; remove/fix any stale `COMPOSE_FILE` line in `.env`; confirm the run prints the "using vm override" line. No sudo is ever needed. |
+| DB crash-loops with `ls: can't open '/docker-entrypoint-initdb.d/': Permission denied` | two host-side causes, both handled by deploy.sh now: (a) restrictive umask on the checkout (NETID homes: 077) → `chmod -R a+rX seed/`; (b) SELinux enforcing → `chcon -R -t container_file_t seed/` (the mounts also carry the `z` flag, but docker-compose over the podman socket can drop it). Verify with `ls -Z seed/customer-db` — files must show `container_file_t`, not `user_home_t`. After pulling these fixes run `podman compose down -v` once (the crash loop leaves half-initialized, unseeded data volumes) and redeploy. Full walkthrough: [step-by-step recovery](#step-by-step-recovery-seed-permission-crash-loop). |
 | `WARN: The "SELLER_BACKEND_DB_PASSWORD" variable is not set` | `.env` predates the seller backend. Current deploy.sh auto-generates it; add it to the canonical env file to silence permanently. |
 | `can only create exec sessions on running containers` / `service "X" is not running` | containers were created by an earlier failed `up` but never started. `podman compose down` (keeps volumes), then re-run the deploy. |
 | `network sandboxnet declared as external, but could not be found` | one-time setup step 2 was skipped — create the network. |
@@ -150,3 +151,95 @@ volumes**. After changing anything under `seed/`, reseed with
 | `deploy: podman socket not found at …` | `systemctl --user enable --now podman.socket` (and `loginctl enable-linger` so it survives logout). |
 | `deploy: X never became ready — aborting` + logs | read the printed DB logs — this is a real database failure (bad volume, OOM, crash), not a script problem. |
 | Login page loads but sign-in 502s | the stack is still booting behind the edge (Keycloak takes ~30–60 s). Wait and retry. |
+| Everything returns `404 page not found` on `127.0.0.1:5002` | that page is Traefik's "no router matched" — the Docker provider registered nothing, almost always because SELinux denies the edge access to the mounted podman socket (`user_tmp_t`). The vm override sets `security_opt: label=disable` on the edge for this; confirm with `podman compose logs edge \| grep -i "permission\|provider"` and check `curl -s http://127.0.0.1:8088/api/http/routers \| head` lists routers after restarting the edge. |
+
+## Step-by-step recovery: seed permission crash-loop
+
+Full walkthrough for the stubborn variant of the
+`ls: can't open '/docker-entrypoint-initdb.d/': Permission denied` crash-loop
+(rootless podman + SELinux). deploy.sh handles all of this automatically —
+when it *still* fails, one of two things is true: the checkout is running old
+code, or the DB volumes were poisoned by earlier crash loops. Work through the
+steps in order; each one verifies before moving on.
+
+### 1. Confirm the checkout has the fixes
+
+```bash
+cd ~/ShopMock          # or wherever the checkout lives
+git fetch origin
+git pull
+git log --oneline -3
+```
+
+The log must include `7362518` (`fix: relabel seed files with chcon ...`) or
+newer. **On an older commit, every later step fails again** — stale checkouts
+have caused repeat failures before.
+
+### 2. Destroy the poisoned database volumes
+
+A crash-looping Postgres marks its data volume "initialized" *before* the
+seed scripts run, so the volume stays permanently empty-but-claimed. Fixing
+file labels does nothing for those volumes — they must go:
+
+```bash
+podman compose down -v
+```
+
+If compose complains about files/socket, be explicit:
+
+```bash
+COMPOSE_FILE=docker-compose.yml:docker-compose.vm.yml \
+DOCKER_SOCK=/run/user/$(id -u)/podman/podman.sock \
+podman compose down -v
+```
+
+### 3. Fix modes and SELinux labels by hand once — and verify
+
+deploy.sh does this too, but doing it manually first shows immediately
+whether `chcon` is allowed on this host at all:
+
+```bash
+chmod -R a+rX seed/
+chcon -R -t container_file_t seed/
+ls -Z seed/customer-db | head -3
+```
+
+Every line must show `container_file_t`. If it still shows `user_home_t`, or
+`chcon` prints `Operation not permitted`, **stop** — the host policy forbids
+the relabel, and the fix needs a different approach (named volumes instead of
+bind mounts, or an admin request). Don't keep re-running the deploy.
+
+### 4. Deploy
+
+```bash
+bash scripts/deploy.sh
+```
+
+The first two lines must be:
+
+```
+deploy: podman host detected — using vm override (COMPOSE_FILE=docker-compose.yml:docker-compose.vm.yml)
+deploy: using 'podman compose' (DOCKER_HOST=unix:///run/user/<uid>/podman/podman.sock)
+```
+
+If they're not, stop — a stale `COMPOSE_FILE` line in `.env` is steering the
+run at the wrong configuration.
+
+### 5. Confirm the DBs came up seeded
+
+The script fails fast with logs when a DB doesn't start, so a run that
+reaches `deploy: complete` is genuinely healthy. Double-check:
+
+```bash
+podman compose ps                                        # everything Up
+podman compose logs customer-db | grep -i "init\|error" | head
+curl -s http://127.0.0.1:5002/api/catalog/products | head -c 200
+```
+
+Still failing? Collect exactly these three things before digging further —
+together they pinpoint which layer (checkout, labels, or something new) is
+wrong:
+
+1. the **first two lines** of the deploy output,
+2. `ls -Z seed/customer-db | head -3`,
+3. the last ~20 lines the script printed.
