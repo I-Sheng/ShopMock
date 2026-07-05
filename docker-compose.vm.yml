@@ -27,6 +27,12 @@ services:
     volumes: !override
       - ${DOCKER_SOCK:?set DOCKER_SOCK in .env to the podman socket path}:/var/run/docker.sock:ro
     networks: !override [sandboxnet]
+    # SELinux-enforcing host: the podman socket is labeled user_tmp_t, which
+    # containers may not touch — Traefik then discovers zero routers and 404s
+    # everything. chcon can't stick on a socket (recreated on restart), so turn
+    # off label separation for this one container instead.
+    security_opt:
+      - label=disable
 
   storefront:
     networks: !override [sandboxnet]
