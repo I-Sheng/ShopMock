@@ -9,10 +9,11 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# No docker on this host but podman is here (the UWB VM): make sure the podman
-# API socket is up and point both compose (DOCKER_HOST) and the vm override's
-# ${DOCKER_SOCK} interpolation at it, unless the caller already set them.
-if ! command -v docker >/dev/null 2>&1 && command -v podman >/dev/null 2>&1; then
+# The deploy host (UWB VM) runs rootless podman — podman is the first-class
+# runtime here, docker only a fallback for dev machines. When podman exists,
+# bring its API socket up and point both compose (DOCKER_HOST) and the vm
+# override's ${DOCKER_SOCK} interpolation at it, unless the caller already did.
+if command -v podman >/dev/null 2>&1; then
   if [ "$(id -u)" = "0" ]; then
     sock=/run/podman/podman.sock
     systemctl start podman.socket 2>/dev/null || true
@@ -28,18 +29,21 @@ if ! command -v docker >/dev/null 2>&1 && command -v podman >/dev/null 2>&1; the
   fi
 fi
 
-# Pick a compose command: real docker, standalone docker-compose (talks to the
-# podman socket via DOCKER_HOST), or podman compose. Override with COMPOSE_CMD.
+# Pick a compose command: podman compose first, then the standalone
+# docker-compose binary (talks to the podman socket via DOCKER_HOST when one
+# was found above), then real docker. Override with COMPOSE_CMD.
 if [ -n "${COMPOSE_CMD:-}" ]; then
   read -ra COMPOSE <<<"$COMPOSE_CMD"
+elif command -v podman >/dev/null 2>&1 && podman compose version >/dev/null 2>&1; then
+  COMPOSE=(podman compose)
+elif [ -n "${DOCKER_SOCK:-}" ] && command -v docker-compose >/dev/null 2>&1; then
+  COMPOSE=(docker-compose)
 elif command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
   COMPOSE=(docker compose)
 elif command -v docker-compose >/dev/null 2>&1; then
   COMPOSE=(docker-compose)
-elif command -v podman >/dev/null 2>&1 && podman compose version >/dev/null 2>&1; then
-  COMPOSE=(podman compose)
 else
-  echo "deploy: no compose implementation found (docker compose / docker-compose / podman compose)" >&2
+  echo "deploy: no compose implementation found (podman compose / docker-compose / docker compose)" >&2
   exit 1
 fi
 echo "deploy: using '${COMPOSE[*]}' (DOCKER_HOST=${DOCKER_HOST:-default})"
@@ -54,14 +58,50 @@ if [ ! -f .env ]; then
   exit 1
 fi
 
+# On the podman host the vm override must be active — rootless podman cannot
+# mount /var/run/docker.sock (the edge's Docker-provider socket), and services
+# must join sandboxnet. Honor an explicit COMPOSE_FILE (caller env or .env);
+# otherwise switch it on automatically when the podman branch above fired.
+if [ -n "${DOCKER_SOCK:-}" ]; then
+  effective="${COMPOSE_FILE:-$(grep '^COMPOSE_FILE=' .env | cut -d= -f2- || true)}"
+  if [ -z "$effective" ]; then
+    export COMPOSE_FILE=docker-compose.yml:docker-compose.vm.yml
+    echo "deploy: podman host detected — using vm override (COMPOSE_FILE=$COMPOSE_FILE)"
+  elif ! printf '%s' "$effective" | grep -q 'docker-compose\.vm\.yml'; then
+    echo "deploy: ERROR: podman host, but COMPOSE_FILE ($effective) does not include docker-compose.vm.yml —" >&2
+    echo "        the edge would try to bind /var/run/docker.sock and fail (rootless podman cannot create it)." >&2
+    echo "        Fix the COMPOSE_FILE line in .env (or unset it) and re-run." >&2
+    exit 1
+  fi
+fi
+
+# New compose variables can land in the repo before the runner's canonical
+# .env learns about them. A missing var would interpolate to a blank string
+# (services then disagree with the DB role password), so generate a lab value
+# instead. The role scripts below ALTER the password on every deploy, so the
+# DB side re-syncs to whatever .env now holds.
+for var in SELLER_BACKEND_DB_PASSWORD; do
+  if ! grep -q "^${var}=" .env; then
+    echo "deploy: ${var} missing from .env — generating a lab value (add it to the canonical env file too)" >&2
+    echo "${var}=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')" >> .env
+  fi
+done
+
 "${COMPOSE[@]}" up -d --build
 
 echo "deploy: waiting for databases..."
-for db in customer-db orders-db finance-db; do
+for db in customer-db orders-db finance-db catalog-db; do
+  ready=
   for _ in $(seq 1 60); do
-    "${COMPOSE[@]}" exec -T "$db" pg_isready -U postgres >/dev/null 2>&1 && break
+    "${COMPOSE[@]}" exec -T "$db" pg_isready -U postgres >/dev/null 2>&1 && { ready=1; break; }
     sleep 2
   done
+  if [ -z "$ready" ]; then
+    echo "deploy: $db never became ready — aborting" >&2
+    "${COMPOSE[@]}" ps "$db" >&2 || true
+    "${COMPOSE[@]}" logs --tail 25 "$db" >&2 || true
+    exit 1
+  fi
 done
 
 echo "deploy: applying RPC functions..."
@@ -75,6 +115,13 @@ for db in customer-db orders-db finance-db; do
   "${COMPOSE[@]}" exec -T -e INTERNAL_BACKEND_DB_PASSWORD="$pw" "$db" \
     sh /docker-entrypoint-initdb.d/05_internal_backend_role.sh
 done
+
+echo "deploy: ensuring seller_backend role..."
+pw=$(grep '^SELLER_BACKEND_DB_PASSWORD=' .env | cut -d= -f2-)
+"${COMPOSE[@]}" exec -T -e SELLER_BACKEND_DB_PASSWORD="$pw" catalog-db \
+  sh /docker-entrypoint-initdb.d/05_seller_backend_role.sh
+"${COMPOSE[@]}" exec -T -e SELLER_BACKEND_DB_PASSWORD="$pw" orders-db \
+  sh /docker-entrypoint-initdb.d/06_seller_backend_role.sh
 
 echo "deploy: reloading PostgREST schema caches..."
 "${COMPOSE[@]}" exec -T customer-db psql -U postgres -d customer -c "NOTIFY pgrst, 'reload schema';"

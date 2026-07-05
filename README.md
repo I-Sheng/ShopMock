@@ -13,6 +13,9 @@ docker compose pull           # pull every image
 docker compose up -d          # boots stack (incl. Wazuh) and seeds everything
 ```
 
+Deploying to the lab VM (rootless podman, campus URL) is different — see
+[`DEPLOY.md`](DEPLOY.md).
+
 Every component seeds itself on `up`:
 
 - Postgres DBs run `seed/<db>/01_schema.sql` then `02_seed.sql` on first boot.
