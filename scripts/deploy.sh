@@ -95,6 +95,15 @@ done
 # to open up, and a no-op on dev machines.
 chmod -R a+rX seed/
 
+# SELinux-enforcing hosts additionally need a container-readable label on the
+# bind-mounted files (user_home_t is denied to containers). The mounts carry
+# the `z` flag, but docker-compose over the podman API socket has been seen
+# dropping it — relabel explicitly; chcon on your own files needs no sudo.
+if command -v getenforce >/dev/null 2>&1 && [ "$(getenforce)" = "Enforcing" ]; then
+  chcon -R -t container_file_t seed/ \
+    || echo "deploy: warning: could not relabel seed/ for SELinux (chcon failed)" >&2
+fi
+
 "${COMPOSE[@]}" up -d --build
 
 echo "deploy: waiting for databases..."
