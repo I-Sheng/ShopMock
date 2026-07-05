@@ -1,0 +1,112 @@
+# Overrides for the UWB VM (shopmock.uwb.edu) — rootless Podman host.
+#
+# Usage: set in the VM's .env ->  COMPOSE_FILE=docker-compose.yml:docker-compose.vm.yml
+# Requires the docker-compose v2 binary talking to the Podman API socket
+# (DOCKER_HOST=unix:///run/user/<uid>/podman/podman.sock); `!override` tags
+# need compose >= 2.24.
+#
+# What this changes and why:
+#  * every service joins ONLY the admin-mandated `sandboxnet` (created with:
+#    podman network create --internal --subnet 10.202.0.0/24 sandboxnet) —
+#    the tier segmentation collapses on this host by policy
+#  * the campus URL http://shopmock.uwb.edu/isheng07/ forwards to port 5002,
+#    so the edge binds 127.0.0.1:5002 instead of 0.0.0.0:80
+#  * every other published port binds 127.0.0.1 only (nothing else is exposed
+#    on the campus network); bastion moves off :22, which is the VM's own sshd
+#  * Traefik watches the Podman socket (Docker-compatible API)
+
+networks:
+  sandboxnet:
+    external: true
+
+services:
+  edge:
+    ports: !override
+      - "127.0.0.1:5002:80"
+      - "127.0.0.1:8088:8080"
+    volumes: !override
+      - ${DOCKER_SOCK:?set DOCKER_SOCK in .env to the podman socket path}:/var/run/docker.sock:ro
+    networks: !override [sandboxnet]
+
+  storefront:
+    networks: !override [sandboxnet]
+    labels:
+      traefik.docker.network: sandboxnet
+
+  search:
+    networks: !override [sandboxnet]
+
+  search-dashboard:
+    ports: !override ["127.0.0.1:5602:5601"]
+    networks: !override [sandboxnet]
+
+  identity:
+    ports: !override ["127.0.0.1:8081:8080"]
+    networks: !override [sandboxnet]
+    labels:
+      traefik.docker.network: sandboxnet
+
+  catalog-svc:
+    networks: !override [sandboxnet]
+    labels:
+      traefik.docker.network: sandboxnet
+
+  order-svc:
+    networks: !override [sandboxnet]
+    labels:
+      traefik.docker.network: sandboxnet
+
+  checkout-svc:
+    networks: !override [sandboxnet]
+    labels:
+      traefik.docker.network: sandboxnet
+
+  customer-svc:
+    networks: !override [sandboxnet]
+    labels:
+      traefik.docker.network: sandboxnet
+
+  seller-svc:
+    networks: !override [sandboxnet]
+    labels:
+      traefik.docker.network: sandboxnet
+
+  internal-ops-svc:
+    networks: !override [sandboxnet]
+    labels:
+      traefik.docker.network: sandboxnet
+
+  internal-service-backend:
+    networks: !override [sandboxnet]
+    labels:
+      traefik.docker.network: sandboxnet
+
+  customer-db:
+    networks: !override [sandboxnet]
+
+  catalog-db:
+    networks: !override [sandboxnet]
+
+  orders-db:
+    networks: !override [sandboxnet]
+
+  finance-db:
+    networks: !override [sandboxnet]
+
+  vault:
+    ports: !override ["127.0.0.1:8200:8200"]
+    networks: !override [sandboxnet]
+
+  vault-seed:
+    networks: !override [sandboxnet]
+
+  search-seed:
+    networks: !override [sandboxnet]
+
+  bastion:
+    # host :22 is the VM's real sshd — bastion moves to localhost:2202
+    ports: !override ["127.0.0.1:2202:2222"]
+    networks: !override [sandboxnet]
+
+  wazuh:
+    networks: !override [sandboxnet]
