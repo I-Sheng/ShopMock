@@ -9,10 +9,11 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# No docker on this host but podman is here (the UWB VM): make sure the podman
-# API socket is up and point both compose (DOCKER_HOST) and the vm override's
-# ${DOCKER_SOCK} interpolation at it, unless the caller already set them.
-if ! command -v docker >/dev/null 2>&1 && command -v podman >/dev/null 2>&1; then
+# The deploy host (UWB VM) runs rootless podman — podman is the first-class
+# runtime here, docker only a fallback for dev machines. When podman exists,
+# bring its API socket up and point both compose (DOCKER_HOST) and the vm
+# override's ${DOCKER_SOCK} interpolation at it, unless the caller already did.
+if command -v podman >/dev/null 2>&1; then
   if [ "$(id -u)" = "0" ]; then
     sock=/run/podman/podman.sock
     systemctl start podman.socket 2>/dev/null || true
@@ -28,18 +29,21 @@ if ! command -v docker >/dev/null 2>&1 && command -v podman >/dev/null 2>&1; the
   fi
 fi
 
-# Pick a compose command: real docker, standalone docker-compose (talks to the
-# podman socket via DOCKER_HOST), or podman compose. Override with COMPOSE_CMD.
+# Pick a compose command: podman compose first, then the standalone
+# docker-compose binary (talks to the podman socket via DOCKER_HOST when one
+# was found above), then real docker. Override with COMPOSE_CMD.
 if [ -n "${COMPOSE_CMD:-}" ]; then
   read -ra COMPOSE <<<"$COMPOSE_CMD"
+elif command -v podman >/dev/null 2>&1 && podman compose version >/dev/null 2>&1; then
+  COMPOSE=(podman compose)
+elif [ -n "${DOCKER_SOCK:-}" ] && command -v docker-compose >/dev/null 2>&1; then
+  COMPOSE=(docker-compose)
 elif command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
   COMPOSE=(docker compose)
 elif command -v docker-compose >/dev/null 2>&1; then
   COMPOSE=(docker-compose)
-elif command -v podman >/dev/null 2>&1 && podman compose version >/dev/null 2>&1; then
-  COMPOSE=(podman compose)
 else
-  echo "deploy: no compose implementation found (docker compose / docker-compose / podman compose)" >&2
+  echo "deploy: no compose implementation found (podman compose / docker-compose / docker compose)" >&2
   exit 1
 fi
 echo "deploy: using '${COMPOSE[*]}' (DOCKER_HOST=${DOCKER_HOST:-default})"
@@ -52,6 +56,15 @@ fi
 if [ ! -f .env ]; then
   echo "deploy: .env not found (set SHOPMOCK_ENV_FILE or create .env)" >&2
   exit 1
+fi
+
+# On the podman host the vm override must be active — rootless podman cannot
+# mount /var/run/docker.sock (the edge's Docker-provider socket), and services
+# must join sandboxnet. Honor an explicit COMPOSE_FILE (caller env or .env);
+# otherwise switch it on automatically when the podman branch above fired.
+if [ -n "${DOCKER_SOCK:-}" ] && [ -z "${COMPOSE_FILE:-}" ] && ! grep -q '^COMPOSE_FILE=' .env; then
+  export COMPOSE_FILE=docker-compose.yml:docker-compose.vm.yml
+  echo "deploy: podman host detected — using vm override (COMPOSE_FILE=$COMPOSE_FILE)"
 fi
 
 # New compose variables can land in the repo before the runner's canonical
