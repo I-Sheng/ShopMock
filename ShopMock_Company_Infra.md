@@ -56,8 +56,8 @@ hardest-to-reach; Tier 2 is the most exposed but lowest-impact.
 <tbody>
 <tr class="odd">
 <td><p><strong>Tier 0</strong></p>
-<p><em><strong>Identity / Global Admin</strong></em></p></td>
-<td>Identity service, global admin, access management</td>
+<p><em><strong>Control Plane — Identity / Directory / PKI</strong></em></p></td>
+<td>FreeIPA domain controller (LDAP directory + Kerberos KDC + PKI/CA), workforce &amp; admin identity, access management (HBAC). Realized as the AD-equivalent DC; reached only via the PAW (access plane). Customer login (Keycloak/CIAM) is a Tier-1 workload that federates employees from here.</td>
 <td>Full platform compromise. Key of the kingdom — bypass means everything else falls.</td>
 </tr>
 <tr class="even">
@@ -95,7 +95,7 @@ service.
 
 | **Tier**                             | **Container Deployment Strategy**                                                                                                                                             |
 | ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Tier 0 — Identity / Global Admin** | Identity and access-management containers run in their own locked-down network segment, reachable only through a bastion/admin path.                                          |
+| **Tier 0 — Control Plane (Identity/Directory/PKI)** | The **FreeIPA domain controller** (LDAP + Kerberos + PKI/CA) runs in its own locked-down `tier0_net`, reachable only through the **PAW** (access plane). Where the network cannot be segmented (the flat-`sandboxnet` VM), Tier 0 is enforced by **identity** — HBAC restricts control-plane SSH to `tier0-admins`. |
 | **Tier 1 — Critical Services**       | Checkout/payment, identity, and catalog/pricing each get dedicated containers, replicated across hosts, in a tightly firewalled segment. Largest blast radius, most isolated. |
 | **Tier 2 — Line-of-Business**        | Seller dashboards and regional support tooling run as containers in a separate segment, scaled per region/seller so one tenant's issue cannot reach others.                   |
 | **Shared Data Stores**               | Order, catalog, and customer DBs sit behind their owning service containers and are only reachable from those services — never directly from the frontend.                    |
@@ -129,7 +129,7 @@ route.
 <tbody>
 <tr class="odd">
 <td><p><em>[Network Distribution Diagram — to be inserted]</em></p>
-<p>External → DMZ → Tier 2 Segment → Tier 1 Segment → Tier 0 Segment, with Shared DBs behind Tier 1/2 services.</p></td>
+<p>External → DMZ → Tier 2 Segment → Tier 1 Segment → Tier 0 Control Plane (FreeIPA DC), with Shared DBs behind Tier 1/2 services. Admins reach Tier 0 only through the <strong>PAW</strong> (access plane); the management plane (Keycloak admin, Vault, IPA Web UI) sits alongside on <code>mgmt_net</code>. This realizes the three planes of Microsoft's Enterprise Access Model — control (Tier 0 = the directory/PKI), management (workload admin surfaces), and access (the PAW). Keycloak is the customer <strong>CIAM</strong> workload (Tier 1) and federates employees from FreeIPA.</p></td>
 </tr>
 </tbody>
 </table>

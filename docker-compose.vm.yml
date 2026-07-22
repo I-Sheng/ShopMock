@@ -92,6 +92,16 @@ services:
     labels:
       traefik.docker.network: sandboxnet
 
+  oe-dashboard:
+    networks: !override [sandboxnet]
+    volumes: !override
+      - ${DOCKER_SOCK:?set DOCKER_SOCK in .env to the podman socket path}:/var/run/docker.sock:ro
+    # same SELinux situation as the edge: the podman socket is user_tmp_t
+    security_opt:
+      - label=disable
+    labels:
+      traefik.docker.network: sandboxnet
+
   customer-db:
     networks: !override [sandboxnet]
 
@@ -114,8 +124,17 @@ services:
   search-seed:
     networks: !override [sandboxnet]
 
-  bastion:
-    # host :22 is the VM's real sshd — bastion moves to localhost:2202
+  # Tier-0 control plane. On the flat sandboxnet there is no network segmentation, so
+  # Tier 0 is enforced by IDENTITY — FreeIPA HBAC/Kerberos — not by a network boundary.
+  # The alias keeps the DC's FQDN resolvable for enrolled clients on the shared net.
+  ipa:
+    ports: !override ["127.0.0.1:8443:443"]   # IPA Web UI — mgmt-only, loopback only
+    networks: !override
+      sandboxnet:
+        aliases: [ipa.shopmock.lab]
+
+  paw:
+    # host :22 is the VM's real sshd — the PAW moves to localhost:2202
     ports: !override ["127.0.0.1:2202:2222"]
     networks: !override [sandboxnet]
 

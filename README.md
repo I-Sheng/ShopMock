@@ -40,11 +40,13 @@ To reseed from scratch: `docker compose down -v && docker compose up -d`.
 | Seller API (Tier 2) | http://localhost/api/seller/sellers | PostgREST (read-only browse) |
 | Seller Backend API (Tier 2) | http://localhost/api/seller-backend/listings | Django; seller token required (see below) |
 | Internal Ops API (Tier 2) | http://localhost/api/ops/feature_flags | PostgREST |
+| OE dashboard | http://localhost/oe | container health + route probes + DB stats; HTTP basic auth (`OE_USERNAME` / `OE_PASSWORD` in `.env`) |
 | Traefik dashboard | http://localhost:8088 | lab only |
-| Identity admin (Keycloak) | http://localhost:8081 | admin console — mgmt-only; `/auth/admin` is blocked at the public edge |
+| Identity admin (Keycloak) | http://localhost:8081 | CIAM admin console — mgmt-only; `/auth/admin` is blocked at the public edge |
+| FreeIPA Web UI (Tier 0) | https://localhost:8443 | control-plane DC admin — mgmt-only, reach via the PAW |
 | Search dashboard | http://localhost:5602 | OpenSearch Dashboards |
 | Vault | http://localhost:8200 | dev mode, token in `.env` |
-| Bastion (SSH) | `ssh <BASTION_USER>@localhost` (port 22) | only path into `mgmt_net` |
+| PAW (SSH) | `ssh <BASTION_USER>@localhost` (port 22) | access plane — the path *up* to Tier 0; domain admins auth via Kerberos (HBAC), `BASTION_USER` is break-glass |
 
 ## Customer login & checkout
 
@@ -74,7 +76,9 @@ RPCs. Customer PII is never browsable — `customer-svc` exposes only the
 > are possible by design — realistic targets for the capstone.
 
 Test logins (lab only): `ada` / `Password123!` (customer),
-`nwgadgets` / `Seller123!` (seller), `gadmin` / `ChangeMe-Tier0!` (global-admin).
+`nwgadgets` / `Seller123!` (seller) — both native Keycloak (CIAM) users. The
+**employee/global-admin identities now live in FreeIPA (Tier 0)** and federate into
+Keycloak over LDAP: `gadmin` / `$IPA_ADMIN_PASSWORD` and `finance.clerk` / `Staff123!`.
 Or register a fresh customer from the storefront.
 
 ## Seller backend (Tier 2)
@@ -117,25 +121,25 @@ curl -s -H "Authorization: Bearer $TOKEN" http://localhost/api/seller-backend/li
 ## Ports & exposure
 
 **Only one port should be public: `80` (the storefront/API edge — standard HTTP).**
-Everything else is either admin (reach via the bastion) or strictly internal.
+Everything else is either admin (reach via the PAW) or strictly internal.
 
 ### Host-published ports (in `docker-compose.yml`)
 
 | Host port | → container:port | Service | Purpose | Expose to public? |
 | --- | --- | --- | --- | --- |
 | **80** | edge (traefik) :80 | Edge / reverse proxy | The single public ingress — storefront + all `/api/*` (HTTP) | ✅ **Yes** (the only one) |
-| 22 | bastion :2222 | Bastion (SSH) | Controlled admin entry; the only door into `mgmt_net` | ⚠️ Restricted — IP-allowlist / VPN, never open-internet |
-| 8081 | identity (keycloak) :8080 | Identity admin console | Realm/user/role administration | ❌ No — mgmt-only (via bastion) |
-| 8200 | vault :8200 | Secrets/Key mgmt | Vault API + UI | ❌ No — mgmt-only (via bastion) |
+| 22 | paw :2222 | PAW (SSH) | Access plane — the only door up to Tier 0 (`tier0_net`) + `mgmt_net` | ⚠️ Restricted — IP-allowlist / VPN, never open-internet |
+| 8443 | ipa :443 | FreeIPA Web UI (Tier 0) | Control-plane DC administration | ❌ No — mgmt-only (via PAW) |
+| 8081 | identity (keycloak) :8080 | CIAM admin console | Realm/user/role administration | ❌ No — mgmt-only (via PAW) |
+| 8200 | vault :8200 | Secrets/Key mgmt | Vault API + UI | ❌ No — mgmt-only (via PAW) |
 | 8088 | edge (traefik) :8080 | Traefik dashboard | Routing introspection | ❌ No — lab debug only |
 | 5602 | search-dashboard :5601 | OpenSearch Dashboards | Search ops UI | ❌ No — mgmt-only |
 
-> The four `❌`/`⚠️` ports are published to the host **only for lab convenience**.
-> To match the design (single public edge; Tier-0 reachable solely via the bastion
-> on `mgmt_net`), delete the `ports:` entries for `identity`, `vault`, the traefik
-> dashboard, and `search-dashboard` — then reach them by SSH-tunnelling through the
-> bastion. For HTTPS, terminate TLS at the edge and publish **443** alongside
-> (or instead of) port 80.
+> The `❌`/`⚠️` ports are published to the host **only for lab convenience**.
+> To match the design (single public edge; Tier-0 reachable solely via the PAW),
+> delete the `ports:` entries for `ipa`, `identity`, `vault`, the traefik dashboard,
+> and `search-dashboard` — then reach them by SSH-tunnelling through the PAW. For
+> HTTPS, terminate TLS at the edge and publish **443** alongside (or instead of) port 80.
 
 ### Internal-only ports (never published; reachable only on their Docker network)
 
@@ -153,11 +157,14 @@ host port, so there is no path to them from the public side — see below.
 
 ## How segmentation is enforced
 
-Networks `tier1_net`, `tier2_net`, `data_net`, `soc_net`, `mgmt_net` are
+Networks `tier0_net`, `tier1_net`, `tier2_net`, `data_net`, `soc_net`, `mgmt_net` are
 `internal: true` (no internet, not bridged to the edge). A database attaches to
 `data_net` only; its owning service bridges `data_net` ↔ its tier network. The
 storefront/edge never touches `data_net`, so the DBs cannot be reached directly
-from the public side — matching design §6a.
+from the public side — matching design §6a. The **FreeIPA DC** sits on `tier0_net`,
+shared only with the **PAW**; on the flat-`sandboxnet` VM (where these networks
+collapse) Tier 0 is instead enforced by **FreeIPA HBAC** — only `tier0-admins` may
+SSH to the control-plane hosts.
 
 ## Seed data → datastore
 
@@ -192,12 +199,13 @@ Per-container working set at peak:
 | `search-dashboard` | opensearch-dashboards | 0.25 | 768 MB |
 | 4× `*-db` (postgres) | postgres | 1.00 | 1 GB |
 | `vault` | vault | 0.10 | 128 MB |
-| `bastion` | openssh-server | 0.05 | 64 MB |
+| `ipa` (freeipa) | freeipa-server | 0.50 | 2 GB |
+| `paw` (ipa-client) | almalinux+sshd | 0.10 | 128 MB |
 | `wazuh-manager` | wazuh-manager | 0.50 | 1 GB |
 | `wazuh-indexer` | wazuh-indexer | 1.00 | 2.5 GB |
 | `wazuh-dashboard` | wazuh-dashboard | 0.25 | 768 MB |
-| **Working-set total** | | **~5.5 vCPU** | **~9.5 GB** |
-| **Provision (≈30% headroom + Docker/OS)** | | **8 vCPU** | **16 GB** |
+| **Working-set total** | | **~6 vCPU** | **~11.5 GB** |
+| **Provision (≈30% headroom + Docker/OS)** | | **8 vCPU** | **20 GB** |
 
 Maximum storage (~50 GB SSD):
 

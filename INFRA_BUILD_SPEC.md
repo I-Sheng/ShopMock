@@ -44,7 +44,7 @@ can `docker pull` today.
 | Storefront frontend | DMZ / Tier 2 | `nginx:1.27-alpine` | Static web frontend only; **not** a proxy — routing is traefik's job |
 | Search service | DMZ / Tier 2 | `opensearchproject/opensearch:2.13.0` | Product search index (catalog mirror) |
 | Search dashboard (ops) | DMZ / Tier 2 | `opensearchproject/opensearch-dashboards:2.13.0` | Search admin UI |
-| Identity service / SSO | **Tier 1 (Tier-0 control plane)** | `quay.io/keycloak/keycloak:24.0` | OIDC/SSO — the "key of the kingdom" |
+| Identity provider (customer CIAM) | **Tier 1** | `quay.io/keycloak/keycloak:24.0` | Customer/seller OIDC/SSO login; **federates employees from FreeIPA**. A workload, *not* the control plane |
 | Catalog service | Tier 1 | `postgrest/postgrest:v12.2.0` | REST API over **catalog-db** |
 | Order service | Tier 1 | `postgrest/postgrest:v12.2.0` | REST API over **orders-db** |
 | Checkout / Payment service | Tier 1 | `postgrest/postgrest:v12.2.0` | REST API over **finance-db** (mock PCI scope); `record_payment` RPC |
@@ -62,13 +62,22 @@ can `docker pull` today.
 | SIEM indexer | SOC | `wazuh/wazuh-indexer:4.8.0` | Event storage |
 | SIEM dashboard | SOC | `wazuh/wazuh-dashboard:4.8.0` | Analyst console |
 | Log shipper (per host) | all segments | `fluent/fluent-bit:3.0` | Ships container logs → SIEM |
-| Bastion / jump host | **Tier 0** | `lscr.io/linuxserver/openssh-server:latest` | Only entry to Tier-0 admin path |
-| Global Admin console | **Tier 0** | *(Keycloak admin, reached via bastion only)* | Realm/identity governance |
+| **FreeIPA DC (identity/PKI)** | **Tier 0 — control plane** | `quay.io/freeipa/freeipa-server:almalinux-9` | The genuine "key of the kingdom": 389DS LDAP + Kerberos KDC + Dogtag PKI/CA + HBAC. The AD-equivalent workforce/admin directory |
+| PAW / jump host | **Access plane** (not Tier 0) | built from `./paw` (AlmaLinux 9 + ipa-client) | Controlled path *up* to Tier 0; IPA-enrolled so admin SSH auth is Kerberos governed by HBAC |
+| Global Admin console | Access plane | *(Keycloak admin + Vault + IPA Web UI, reached via the PAW)* | Management-plane admin surfaces |
 
 **Why these specific products**
 
-- **Keycloak** is a genuine identity provider (OIDC, SSO, admin console) — it
-  *is* the Tier-0 "identity system" from the design, not a stand-in.
+- **FreeIPA** is the **Tier-0 control plane** — the open-source Active-Directory
+  equivalent (389DS LDAP + Kerberos KDC + Dogtag PKI/CA + HBAC). It *is* the
+  workforce/admin "identity system" the design calls the key of the kingdom, and it
+  maps 1:1 onto Microsoft Tier 0 = "the directory / domain controllers / PKI". It also
+  provides the canonical Tier-0 attack surface (Kerberos TGTs, Kerberoasting, a
+  DCSync-analog, Dogtag cert abuse) that a CIAM stand-in cannot.
+- **Keycloak** is a genuine identity provider (OIDC, SSO) used here as the **customer
+  CIAM workload (Tier 1)** — shopper/seller login. It **federates employees from
+  FreeIPA** over LDAP, so workforce identity chains up to Tier 0 while customer identity
+  stays a workload. It is deliberately *not* the control plane.
 - **PostgREST** makes "service in front of a DB, DB never exposed to the web
   tier" literally true: the only way to the data is the service's HTTP API.
 - **OpenSearch** is a real search engine; mirroring catalog into it reproduces
@@ -88,28 +97,42 @@ which is what enforces "DBs are reachable only through their owning service."
 | Docker network | Internal? | Segment | Who attaches |
 | --- | --- | --- | --- |
 | `edge_net` | no | DMZ / public ingress | traefik, storefront, search |
-| `tier1_net` | yes | Tier 1 critical services | catalog/order/checkout svc, keycloak, traefik |
+| `bastion_net` | no | Public SSH door (access plane) | the PAW only |
+| `tier0_net` | **yes** | **Tier 0 control plane** | **FreeIPA DC** + the PAW that reaches it |
+| `tier1_net` | yes | Tier 1 critical services | catalog/order/checkout svc, keycloak (CIAM), traefik |
 | `tier2_net` | yes | Tier 2 line-of-business | seller svc, internal-ops svc, traefik |
 | `data_net` | **yes** | Data backend (private) | the 4 Postgres DBs + their owning services only |
 | `soc_net` | yes | SOC / security ops | vault, wazuh-*, fluent-bit |
-| `mgmt_net` | yes | Tier-0 admin / bastion path | bastion, keycloak (admin), vault (admin) |
+| `mgmt_net` | yes | Management-plane admin path | PAW, FreeIPA (admin), keycloak (admin), vault (admin) |
+
+**Three planes (Enterprise Access Model):** *control plane* = Tier 0 = FreeIPA (the
+directory/PKI that governs who administers everything); *management plane* = the admin
+surfaces of workloads (Keycloak admin, Vault, IPA Web UI) on `mgmt_net`; *access plane* =
+the PAW, the gated path an admin traverses *up* to Tier 0. The bastion is the access plane,
+never Tier 0 itself.
 
 Enforced invariants (matching design §6a):
 
 - A DB attaches to `data_net` **only**; its owning service bridges
   `data_net` ↔ its tier network. The storefront never touches `data_net`.
-- Tier-0 admin surfaces (Keycloak admin, Vault) are reachable only via
-  `mgmt_net`, whose only ingress is the **bastion**.
+- The **FreeIPA DC** attaches to `tier0_net`; the only workload that shares `tier0_net`
+  is the **PAW**. Management-plane admin surfaces (IPA Web UI, Keycloak admin, Vault) are
+  reachable only via `mgmt_net`, whose only ingress is the PAW.
 - Tier 2 cannot route to `tier1_net` or `data_net` except through published APIs.
+- **On the VM the tier networks collapse to one flat `sandboxnet` (campus policy), so
+  Tier 0 is enforced by IDENTITY instead of network:** FreeIPA HBAC lets only
+  `tier0-admins` SSH to the control-plane hosts (DC + PAW), regardless of reachability.
 
 ```
 Internet ─▶ traefik (edge_net)        ── the ONLY reverse proxy / router
               ├─▶ storefront (edge_net)          ── static SPA host (no proxying)
               ├─▶ search (edge_net)
               ├─▶ catalog/order/checkout (tier1_net) ─▶ [data_net] ─▶ *-db
+              ├─▶ keycloak (tier1_net, CIAM) ──(mgmt_net LDAP)──▶ FreeIPA DC
               └─▶ seller/internal-ops (tier2_net)     ─▶ [data_net] ─▶ catalog-db
 
-Admin/Operators ─▶ bastion (mgmt_net) ─▶ Keycloak admin / Vault
+Admin ─▶ PAW (bastion_net→tier0_net) ─▶ FreeIPA DC (Tier 0)     ── HBAC: tier0-admins only
+              └─(mgmt_net)─▶ Keycloak admin / Vault / IPA Web UI  ── management plane
 All containers ─▶ fluent-bit ─▶ Wazuh (soc_net)
 ```
 
@@ -132,7 +155,8 @@ import on startup or a one-shot job.
 | 6 | Orders, line items, shipments | `seed/orders-db/02_seed.sql` | **Orders DB** | initdb |
 | 7 | Finance schema (PCI scope) | `seed/finance-db/01_schema.sql` | **Financial/Wallet DB** (db `finance`) | initdb |
 | 8 | Wallets, tokenized cards, transactions, revenue | `seed/finance-db/02_seed.sql` | **Financial/Wallet DB** | initdb |
-| 9 | Realm, clients, roles, **users** (customers, sellers, employees, global-admin) | `seed/identity/realm-shopmock.json` | **Identity store** (Keycloak) | `--import-realm` on start |
+| 9 | Realm, clients, roles, **customer/seller users** + LDAP federation to FreeIPA | `seed/identity/realm-shopmock.json` | **CIAM store** (Keycloak) | `--import-realm` on start |
+| 9b | **Tier-0 groups (tier0/server-admins/helpdesk), employees (gadmin, finance.clerk), HBAC + sudo rules** | `seed/ipa/bootstrap.sh` | **FreeIPA DC** (Tier 0) | run inside the DC by `deploy.sh` after install |
 | 10 | Secrets: DB creds, payment-gateway key, JWT signing key | `seed/vault/seed-secrets.sh` | **Vault** KV (`secret/shopmock/*`) | one-shot job after Vault unseals |
 | 11 | Search index documents (catalog mirror) | `seed/search/index-catalog.sh` | **OpenSearch** index `catalog` | one-shot bulk job |
 | 12 | Auth write role `customer` + provisioning RPC `ensure_customer()`; revoke anon PII reads | `seed/customer-db/03_roles.sql`, `04_rpc.sql` | **Customer DB** | initdb |
@@ -193,8 +217,8 @@ See `README.md` for the per-service URL/port table and the bastion login.
 | Per-service isolation | One container per service; separate Docker networks per tier |
 | Tiered blast radius | `tier1_net`/`tier2_net`/`data_net` are distinct `internal` networks |
 | Data behind services | DBs on `data_net` only; PostgREST is the sole HTTP path in |
-| Bastion path for Tier 0 | Keycloak admin + Vault reachable only via `mgmt_net` → bastion |
-| Identity = key of kingdom | Keycloak issues the tokens every service trusts |
+| Bastion path for Tier 0 | FreeIPA DC + mgmt surfaces reachable only via the PAW; on the flat VM net, HBAC restricts control-plane SSH to `tier0-admins` |
+| Identity = key of kingdom | FreeIPA is the Tier-0 directory/PKI; Keycloak (Tier-1 CIAM) federates employees from it and issues the tokens services trust |
 
 **Known gaps (same honest caveat as design §6d):** no live detection/IR runbook,
 WAF rules are CRS defaults, and PostgREST gives thin business logic. These are

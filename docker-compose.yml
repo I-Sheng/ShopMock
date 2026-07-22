@@ -82,7 +82,8 @@ services:
       - ./seed/identity:/opt/keycloak/data/import:ro,z
     ports:
       - "8081:8080"                 # admin console (treat as mgmt-only)
-    networks: [tier1_net, mgmt_net]
+    networks: [tier1_net, mgmt_net]  # reaches the FreeIPA DC (LDAP federation) over mgmt_net
+    depends_on: [ipa]                # start after the Tier-0 DC; LDAP federation binds to it
     labels:
       traefik.enable: "true"
       traefik.docker.network: shopmock_tier1_net  # else Traefik may pick the mgmt_net IP it can't reach
@@ -236,6 +237,25 @@ services:
       traefik.http.middlewares.seller-backend-strip.stripprefix.prefixes: "/api/seller-backend"
       traefik.http.services.seller-backend.loadbalancer.server.port: "8000"
 
+  oe-dashboard:                     # OE / ops overview — container health, route probes, DB stats
+    build: ./oe-dashboard
+    restart: unless-stopped
+    environment:
+      OE_USERNAME: ${OE_USERNAME}
+      OE_PASSWORD: ${OE_PASSWORD}
+      PG_SUPERUSER_PASSWORD: ${PG_SUPERUSER_PASSWORD}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro   # read-only: container list/status
+    networks: [tier2_net, data_net]   # tier2: reached by edge + probes via edge; data: DB stats
+    depends_on: [catalog-db, orders-db, customer-db, finance-db]
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: shopmock_tier2_net
+      traefik.http.routers.oe.rule: "PathPrefix(`/oe`)"
+      traefik.http.routers.oe.middlewares: "oe-strip"
+      traefik.http.middlewares.oe-strip.stripprefix.prefixes: "/oe"
+      traefik.http.services.oe.loadbalancer.server.port: "8000"
+
   # ---------------- Data backend (private, internal network only) ----------------
   customer-db:                      # Customer PII — no public API (strictest isolation)
     <<: *pg-common
@@ -317,17 +337,72 @@ services:
     networks: [edge_net]
     depends_on: [search]
 
-  # ---------------- Tier 0 — Bastion / admin path ----------------
-  bastion:
-    image: lscr.io/linuxserver/openssh-server:latest
+  # ---------------- Tier 0 — CONTROL PLANE (FreeIPA: the AD-equivalent DC) ----------------
+  # The genuine Tier-0 asset — 389DS (LDAP directory) + Kerberos KDC + Dogtag PKI/CA + HBAC.
+  # This is the "key of the kingdom": the workforce/admin identity system. Customer identity
+  # (Keycloak) is a Tier-1 CIAM *workload* that federates employees from here — it is NOT the
+  # control plane. See PLAN_TIER0_FREEIPA.md for the three-plane rationale.
+  #
+  # Monolithic by nature: one systemd container supervises LDAP+KDC+CA together — which is
+  # exactly how a domain controller works, so it is modeled as a single "DC", not split per
+  # service. Heavy (~2 GB RAM, slow first install). `--privileged` is unsupported; rootless
+  # podman needs cgroups v2. The runtime flags below may need one bring-up iteration on the VM.
+  ipa:
+    image: quay.io/freeipa/freeipa-server:almalinux-9
+    hostname: ipa.shopmock.lab
+    command:
+      - -U                                   # unattended install
+      - --realm=${IPA_REALM}
+      - --domain=${IPA_DOMAIN}
+      - --ds-password=${IPA_DM_PASSWORD}     # 389DS Directory Manager — an extra crown jewel
+      - --admin-password=${IPA_ADMIN_PASSWORD}
+      - --no-ntp
+      - --no-dns                             # clients resolve ipa.shopmock.lab via net aliases
+    environment:
+      IPA_SERVER_HOSTNAME: ipa.shopmock.lab
+    volumes:
+      - ipa-data:/data
+      - ./seed/ipa:/seed:ro,z          # tier groups + HBAC bootstrap, applied by deploy.sh
+    tmpfs:
+      - /run
+      - /tmp
+    security_opt:
+      - seccomp:unconfined                   # systemd inside the container needs relaxed seccomp
+    cgroup: host
+    stop_grace_period: 30s
+    restart: unless-stopped
+    ports:
+      - "8443:443"                           # IPA Web UI — mgmt-only (treat like Keycloak admin)
+    networks:
+      tier0_net:
+        aliases: [ipa.shopmock.lab]
+      mgmt_net:
+        aliases: [ipa.shopmock.lab]
+
+  # ---------------- ACCESS PLANE — PAW / jump host (the controlled path *up* to Tier 0) --------
+  # A Privileged Access Workstation is NOT Tier 0: it is the gated path an admin traverses to
+  # reach the control plane. Built as an EL9 image enrolled as a FreeIPA client so admin SSH
+  # auth is Kerberos + HBAC (governed by the directory it fronts), not a local password.
+  # Enrollment is best-effort: ${BASTION_USER} stays as a break-glass local account so the door
+  # still opens (degraded, no HBAC) if the DC is down. Replaces the old `bastion` service.
+  paw:
+    build: ./paw
+    hostname: paw.shopmock.lab        # stable FQDN so IPA host-based HBAC can target it
     restart: unless-stopped
     environment:
-      USER_NAME: ${BASTION_USER}
-      USER_PASSWORD: ${BASTION_PASSWORD}
-      PASSWORD_ACCESS: "true"
-      SUDO_ACCESS: "false"
+      PAW_HOSTNAME: paw.shopmock.lab
+      IPA_DOMAIN: ${IPA_DOMAIN}
+      IPA_REALM: ${IPA_REALM}
+      IPA_SERVER: ipa.shopmock.lab
+      IPA_ENROLL_PASSWORD: ${IPA_ADMIN_PASSWORD}   # lab: enroll with admin; prod: a host OTP
+      BASTION_USER: ${BASTION_USER}                # break-glass local account
+      BASTION_PASSWORD: ${BASTION_PASSWORD}
     ports: ["22:2222"]              # public SSH on standard port 22 → container 2222
-    networks: [mgmt_net]            # only path to Keycloak admin + Vault
+    # bastion_net is the PAW's public front door (non-internal, so the host can publish :22);
+    # tier0_net is its only path to the FreeIPA DC; mgmt_net keeps its reach to Keycloak/Vault
+    # admin surfaces. Which admins may actually log in is decided by IPA HBAC, not this container.
+    networks: [bastion_net, tier0_net, mgmt_net]
+    depends_on: [ipa]
 
   # ---------------- SIEM (on by default) ----------------
   # Wazuh manager starts with the core stack. The full single-node bundle
@@ -339,6 +414,8 @@ services:
 
 networks:
   edge_net:   {}
+  bastion_net: {}              # non-internal ingress for the PAW only (public SSH door)
+  tier0_net:  { internal: true }   # control plane — FreeIPA DC + the PAW that reaches it
   tier1_net:  { internal: true }
   tier2_net:  { internal: true }
   data_net:   { internal: true }
@@ -350,3 +427,4 @@ volumes:
   catalog-data: {}
   orders-data: {}
   finance-data: {}
+  ipa-data: {}

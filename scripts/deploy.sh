@@ -145,4 +145,26 @@ echo "deploy: reloading PostgREST schema caches..."
 "${COMPOSE[@]}" exec -T orders-db   psql -U postgres -d orders   -c "NOTIFY pgrst, 'reload schema';"
 "${COMPOSE[@]}" exec -T finance-db  psql -U postgres -d finance  -c "NOTIFY pgrst, 'reload schema';"
 
+# FreeIPA (Tier-0 control plane) — apply the tier groups + HBAC each deploy (like the DB role
+# blocks, the in-container bootstrap is idempotent). Deliberately NON-FATAL: FreeIPA is the
+# heavy new component and its first install is slow; a not-ready DC must WARN, not abort the
+# whole stack deploy. seed/ipa/bootstrap.sh runs inside the DC (it owns the ipa CLI + KDC).
+echo "deploy: waiting for FreeIPA (first install can take several minutes)..."
+ipa_pw=$(grep '^IPA_ADMIN_PASSWORD=' .env | cut -d= -f2-)
+ipa_ready=
+for _ in $(seq 1 90); do   # up to ~15 min on a cold first install
+  if "${COMPOSE[@]}" exec -T -e IPA_ADMIN_PASSWORD="$ipa_pw" ipa \
+       bash -c 'echo "$IPA_ADMIN_PASSWORD" | kinit admin' >/dev/null 2>&1; then
+    ipa_ready=1; break
+  fi
+  sleep 10
+done
+if [ -z "$ipa_ready" ]; then
+  echo "deploy: WARN FreeIPA not ready — skipping Tier-0 bootstrap (check '${COMPOSE[*]} logs ipa')" >&2
+else
+  echo "deploy: applying FreeIPA Tier-0 bootstrap (tier groups + HBAC)..."
+  "${COMPOSE[@]}" exec -T -e IPA_ADMIN_PASSWORD="$ipa_pw" ipa bash /seed/bootstrap.sh \
+    || echo "deploy: WARN Tier-0 bootstrap failed — re-run after the DC settles" >&2
+fi
+
 echo "deploy: complete"

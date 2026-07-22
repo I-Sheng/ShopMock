@@ -202,55 +202,41 @@
       ],
       "firstName": "NW",
       "lastName": "Gadgets"
-    },
-    {
-      "id": "emp-3001",
-      "username": "finance.clerk",
-      "email": "clerk@shopmock.example",
-      "enabled": true,
-      "emailVerified": true,
-      "credentials": [
-        {
-          "type": "password",
-          "value": "Staff123!",
-          "temporary": false
-        }
-      ],
-      "realmRoles": [
-        "employee"
-      ],
-      "groups": [
-        "/staff"
-      ]
-    },
-    {
-      "id": "admin-9001",
-      "username": "gadmin",
-      "email": "gadmin@shopmock.example",
-      "enabled": true,
-      "emailVerified": true,
-      "credentials": [
-        {
-          "type": "password",
-          "value": "ChangeMe-Tier0!",
-          "temporary": false
-        }
-      ],
-      "realmRoles": [
-        "global-admin",
-        "employee"
-      ],
-      "groups": [
-        "/staff"
-      ]
     }
   ],
+  "_comment_users": "Employees (finance.clerk, gadmin) intentionally removed — workforce identity now lives in FreeIPA (Tier 0) and federates in via the LDAP UserStorageProvider below. Customers and sellers stay native to Keycloak (CIAM).",
   "loginWithEmailAllowed": true,
   "registrationEmailAsUsername": false,
   "defaultGroups": [
     "/customers"
   ],
   "components": {
+    "org.keycloak.storage.UserStorageProvider": [
+      {
+        "name": "freeipa",
+        "providerId": "ldap",
+        "_comment": "Federates ShopMock employees from the FreeIPA Tier-0 directory. READ_ONLY: Keycloak never writes back. Binds as the IPA admin for the lab default (bindCredential must match IPA_ADMIN_PASSWORD in .env); production should use a dedicated least-privilege, non-expiring bind account. Customers/sellers remain native Keycloak users.",
+        "config": {
+          "enabled": ["true"],
+          "priority": ["1"],
+          "editMode": ["READ_ONLY"],
+          "importEnabled": ["true"],
+          "syncRegistrations": ["false"],
+          "vendor": ["rhds"],
+          "usernameLDAPAttribute": ["uid"],
+          "rdnLDAPAttribute": ["uid"],
+          "uuidLDAPAttribute": ["ipaUniqueID"],
+          "userObjectClasses": ["inetOrgPerson, organizationalPerson"],
+          "connectionUrl": ["ldap://ipa.shopmock.lab:389"],
+          "usersDn": ["cn=users,cn=accounts,dc=shopmock,dc=lab"],
+          "bindDn": ["uid=admin,cn=users,cn=accounts,dc=shopmock,dc=lab"],
+          "bindCredential": ["ChangeMe-IPAadmin1!"],
+          "searchScope": ["1"],
+          "pagination": ["true"],
+          "connectionPooling": ["true"]
+        }
+      }
+    ],
     "org.keycloak.keys.KeyProvider": [
       {
         "name": "shopmock-rsa",

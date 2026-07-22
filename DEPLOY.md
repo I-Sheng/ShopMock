@@ -17,7 +17,8 @@ doesn't apply there.
 | Compose files | `docker-compose.yml` only | + `docker-compose.vm.yml` override (**required**) |
 | Networks | tiered (`dmz_net`, `tier1_net`, …) | single external `sandboxnet` (campus policy) |
 | Edge binding | `0.0.0.0:80` | `127.0.0.1:5002` (campus URL `http://shopmock.uwb.edu/isheng07/` forwards here) |
-| Other ports | various | all bind `127.0.0.1` only; bastion on `:2202` (`:22` is the VM's own sshd) |
+| Other ports | various | all bind `127.0.0.1` only; PAW on `:2202` (`:22` is the VM's own sshd), FreeIPA Web UI on `:8443` |
+| Tier 0 | `tier0_net` segment (FreeIPA DC + PAW) | flat `sandboxnet` — Tier 0 enforced by **FreeIPA HBAC** (identity), not network |
 | Traefik's Docker socket | `/var/run/docker.sock` | the podman socket, remapped by the override |
 
 The override is the load-bearing piece: rootless podman **cannot** create
@@ -129,10 +130,24 @@ TOKEN=$(curl -s http://127.0.0.1:5002/auth/realms/shopmock/protocol/openid-conne
   -d grant_type=password -d client_id=seller-dashboard \
   -d username=nwgadgets -d password='Seller123!' | jq -r .access_token)
 curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:5002/api/seller-backend/listings | jq
+
+# --- Tier 0 (FreeIPA) --------------------------------------------------------------
+# The DC is heavy and slow to install — deploy.sh WARNs (does not abort) if it is not
+# ready, and re-applies the bootstrap idempotently on the next run.
+podman compose logs ipa | tail -20                       # watch first-install progress
+podman compose exec -e IPA_ADMIN_PASSWORD="$(grep ^IPA_ADMIN_PASSWORD= .env | cut -d= -f2-)" \
+  ipa bash -c 'echo "$IPA_ADMIN_PASSWORD" | kinit admin && ipa user-find && ipa hbacrule-find'
+# Expect: employees gadmin + finance.clerk present; hbac rule 'tier0-access' enabled,
+# 'allow_all' disabled — i.e. Tier 0 is deny-by-default, tier0-admins only.
+
+# Federation round-trip: gadmin authenticates against FreeIPA *through* Keycloak.
+curl -s http://127.0.0.1:5002/auth/realms/shopmock/protocol/openid-connect/token \
+  -d grant_type=password -d client_id=seller-dashboard \
+  -d username=gadmin -d password="$(grep ^IPA_ADMIN_PASSWORD= .env | cut -d= -f2-)" | jq -r .access_token | head -c 40
 ```
 
 Browser: `http://shopmock.uwb.edu/isheng07/` (storefront) and
-`…/isheng07/seller` (Seller Central).
+`…/isheng07/seller` (Seller Central). FreeIPA Web UI: tunnel `:8443` through the PAW.
 
 Seed data caveat: Keycloak realm and DB schema files import **only on fresh
 volumes**. After changing anything under `seed/`, reseed with
@@ -152,6 +167,9 @@ volumes**. After changing anything under `seed/`, reseed with
 | `deploy: X never became ready — aborting` + logs | read the printed DB logs — this is a real database failure (bad volume, OOM, crash), not a script problem. |
 | Login page loads but sign-in 502s | the stack is still booting behind the edge (Keycloak takes ~30–60 s). Wait and retry. |
 | Everything returns `404 page not found` on `127.0.0.1:5002` | that page is Traefik's "no router matched" — the Docker provider registered nothing, almost always because SELinux denies the edge access to the mounted podman socket (`user_tmp_t`). The vm override sets `security_opt: label=disable` on the edge for this; confirm with `podman compose logs edge \| grep -i "permission\|provider"` and check `curl -s http://127.0.0.1:8088/api/http/routers \| head` lists routers after restarting the edge. |
+| `deploy: WARN FreeIPA not ready — skipping Tier-0 bootstrap` | the DC's first install is slow (several minutes) or failed. It is **non-fatal** — the rest of the stack is fine. Watch `podman compose logs -f ipa`; once it prints `FreeIPA server configured`, just re-run `bash scripts/deploy.sh` to apply the bootstrap. If it never configures: FreeIPA needs **cgroups v2** and refuses `--privileged`; confirm `podman info \| grep cgroupVersion` says `v2` and that the host has ~2 GB free for it. |
+| FreeIPA container exits / `systemd` errors on boot | the systemd-in-container flags need tuning for this host. The service sets `cgroup: host`, `security_opt: seccomp:unconfined`, and tmpfs `/run`+`/tmp`; on some rootless-podman hosts you also need `podman ... --systemd=always`. This is the one bring-up step that may need host-specific iteration — see PLAN_TIER0_FREEIPA.md. |
+| PAW SSH works but domain (IPA) logins are refused / no HBAC | the PAW enrolls into FreeIPA **best-effort** at boot; if the DC was not up yet it serves only the `BASTION_USER` break-glass account. Re-create it after the DC is ready: `podman compose up -d --force-recreate paw`, then verify with `podman compose exec paw id gadmin`. HBAC then governs who may log in. |
 
 ## Step-by-step recovery: seed permission crash-loop
 
