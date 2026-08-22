@@ -4,15 +4,27 @@
 # A local break-glass account keeps the door usable if the DC is unreachable.
 FROM almalinux:9
 
-RUN dnf -y install ipa-client openssh-server sudo iputils bind-utils \
+RUN dnf -y install \
+      systemd \
+      ipa-client \
+      openssh-server \
+      sudo \
+      iputils \
+      bind-utils \
     && dnf clean all \
     && ssh-keygen -A
 
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
+COPY shopmock-paw-setup.service /etc/systemd/system/shopmock-paw-setup.service
+
+RUN chmod +x /usr/local/bin/entrypoint.sh \
+    && systemctl enable shopmock-paw-setup.service \
+    && systemctl enable sshd.service
 
 # Match the compose port mapping (22:2222) — sshd listens on 2222 in-container.
 RUN sed -i 's/^#\?Port .*/Port 2222/' /etc/ssh/sshd_config
 
 EXPOSE 2222
-ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+
+STOPSIGNAL SIGRTMIN+3
+CMD ["/sbin/init"]

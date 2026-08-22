@@ -48,7 +48,8 @@ ipa hbacrule-disable allow_all >/dev/null 2>&1 || true
 
 ensure_hbac tier0-access "Tier-0 admins may SSH to the control-plane hosts (DC + PAW)"
 ipa hbacrule-add-user    tier0-access --groups=tier0-admins            >/dev/null 2>&1 || true
-ipa hbacrule-add-host    tier0-access --hosts=ipa.shopmock.lab,paw.shopmock.lab >/dev/null 2>&1 || true
+ipa hbacrule-add-host    tier0-access --hosts=ipa.shopmock.lab         >/dev/null 2>&1 || true
+ipa hbacrule-add-host    tier0-access --hosts=paw.shopmock.lab         >/dev/null 2>&1 || true
 ipa hbacrule-add-service tier0-access --hbacsvcs=sshd                  >/dev/null 2>&1 || true
 
 # Sudo on the PAW is a Tier-0-admins-only privilege.

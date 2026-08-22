@@ -7,6 +7,10 @@ Traefik edge — without breaking the segmentation invariants of spec §2.
 
 Status: **implemented & verified** · Written 2026-07-03 · Completed 2026-07-03
 
+Documentation review: **2026-08-22**. Native customer and seller CIAM remains
+operational after the FreeIPA/PAW Tier 0 changes. Workforce federation is a
+separate identity path and does not change this plan's completion status.
+
 All six phases landed. Backend verified end-to-end via API smoke test (Keycloak
 token → `ensure_customer` → `place_order` → `record_payment`, rows confirmed in
 each DB); new-user provisioning, PII lockdown (anon 401 / token 403 on the
@@ -16,7 +20,9 @@ edge. Only the interactive browser OIDC redirect was not driven headlessly.
 
 ---
 
-## 0. Current gaps (why this doesn't work today)
+## 0. Original gaps resolved by this implementation
+
+The table below is historical: each gap was closed by Phases 1–6.
 
 | # | Gap | Where |
 | --- | --- | --- |
@@ -40,7 +46,7 @@ same-origin with the storefront (no CORS), Traefik remains the single ingress.
      `traefik.docker.network: shopmock_tier1_net`, service port 8080.
    - **Do not route `/auth/admin` publicly** — add a higher-priority edge rule
      that blocks it (or an allowlist middleware). Admin console stays on the
-     mgmt path (`:8081` / bastion), preserving the Tier-0 invariant.
+     management path (`:8081` / PAW), preserving the Tier-0 invariant.
 2. `seed/identity/realm-shopmock.json`:
    - `"registrationAllowed": true` — this *is* the sign-up feature (Keycloak's
      built-in registration page; zero custom code).

@@ -204,7 +204,6 @@
       "lastName": "Gadgets"
     }
   ],
-  "_comment_users": "Employees (finance.clerk, gadmin) intentionally removed — workforce identity now lives in FreeIPA (Tier 0) and federates in via the LDAP UserStorageProvider below. Customers and sellers stay native to Keycloak (CIAM).",
   "loginWithEmailAllowed": true,
   "registrationEmailAsUsername": false,
   "defaultGroups": [
@@ -215,7 +214,6 @@
       {
         "name": "freeipa",
         "providerId": "ldap",
-        "_comment": "Federates ShopMock employees from the FreeIPA Tier-0 directory. READ_ONLY: Keycloak never writes back. Binds as the IPA admin for the lab default (bindCredential must match IPA_ADMIN_PASSWORD in .env); production should use a dedicated least-privilege, non-expiring bind account. Customers/sellers remain native Keycloak users.",
         "config": {
           "enabled": ["true"],
           "priority": ["1"],

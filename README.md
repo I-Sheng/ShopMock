@@ -1,30 +1,40 @@
 # ShopMock Infrastructure
 
-Runnable Docker realization of the design in
-[`../ShopMock_Company_Infra.md`](../ShopMock_Company_Infra.md). For the full
-rationale, service→image map, and seed-data plan see
-[`../INFRA_BUILD_SPEC.md`](../INFRA_BUILD_SPEC.md).
+Runnable Docker/Podman realization of the design in
+[`ShopMock_Company_Infra.md`](ShopMock_Company_Infra.md). For the full
+rationale, service-to-image map, and seed-data plan, see
+[`INFRA_BUILD_SPEC.md`](INFRA_BUILD_SPEC.md).
+
+## Documentation map
+
+| Document | Purpose |
+| --- | --- |
+| [`ShopMock_Company_Infra.md`](ShopMock_Company_Infra.md) | Authoritative system and trust-boundary design |
+| [`INFRA_BUILD_SPEC.md`](INFRA_BUILD_SPEC.md) | Running service, datastore, network, and seed-data mapping |
+| [`DEPLOY.md`](DEPLOY.md) | Rootless-Podman VM deployment and recovery procedures |
+| [`PLAN_AUTH_CHECKOUT.md`](PLAN_AUTH_CHECKOUT.md) | Implemented customer authentication and checkout record |
+| [`PLAN_TIER0_FREEIPA.md`](PLAN_TIER0_FREEIPA.md) | Tier 0/PAW implementation record and remaining federation work |
 
 ## Quick start
 
 ```bash
 cp .env.example .env          # fake lab secrets
-docker compose pull           # pull every image
-docker compose up -d          # boots stack (incl. Wazuh) and seeds everything
+bash scripts/deploy.sh         # builds, starts, waits, and applies idempotent bootstrap data
 ```
 
 Deploying to the lab VM (rootless podman, campus URL) is different — see
 [`DEPLOY.md`](DEPLOY.md).
 
-Every component seeds itself on `up`:
+Most components seed themselves during startup:
 
 - Postgres DBs run `seed/<db>/01_schema.sql` then `02_seed.sql` on first boot.
-- Keycloak imports `seed/identity/realm-shopmock.json` on start.
-- The one-shot `vault-seed` and `search-seed` containers wait for their
-  service to be ready, run `seed/vault/seed-secrets.sh` /
-  `seed/search/index-catalog.sh`, and exit.
+- Keycloak imports `seed/identity/realm-shopmock.json` when its realm volume is new.
+- The one-shot `vault-seed` and `search-seed` containers wait for their services.
+- `scripts/deploy.sh` reapplies database roles/RPCs, Keycloak redirect origins, and
+  the idempotent FreeIPA users/groups/HBAC bootstrap on every deployment.
 
-To reseed from scratch: `docker compose down -v && docker compose up -d`.
+To reseed from scratch: `docker compose down -v && bash scripts/deploy.sh`.
+This destroys lab data and recreates all seed state; do not use it for routine updates.
 
 ## Endpoints
 
@@ -40,7 +50,7 @@ To reseed from scratch: `docker compose down -v && docker compose up -d`.
 | Seller API (Tier 2) | http://localhost/api/seller/sellers | PostgREST (read-only browse) |
 | Seller Backend API (Tier 2) | http://localhost/api/seller-backend/listings | Django; seller token required (see below) |
 | Internal Ops API (Tier 2) | http://localhost/api/ops/feature_flags | PostgREST |
-| OE dashboard | http://localhost/oe | container health + route probes + DB stats; HTTP basic auth (`OE_USERNAME` / `OE_PASSWORD` in `.env`) |
+| OE dashboard | Not in the current checkout | Optional component; the referenced `./oe-dashboard` build context is absent and locally disabled |
 | Traefik dashboard | http://localhost:8088 | lab only |
 | Identity admin (Keycloak) | http://localhost:8081 | CIAM admin console — mgmt-only; `/auth/admin` is blocked at the public edge |
 | FreeIPA Web UI (Tier 0) | https://localhost:8443 | control-plane DC admin — mgmt-only, reach via the PAW |
@@ -52,7 +62,7 @@ To reseed from scratch: `docker compose down -v && docker compose up -d`.
 
 The storefront supports the full customer journey — **sign up / log in** (Keycloak
 OIDC, PKCE) and **check out a cart** (order + mock payment) — all same-origin
-through the edge. See `../PLAN_AUTH_CHECKOUT.md` for the design.
+through the edge. See [`PLAN_AUTH_CHECKOUT.md`](PLAN_AUTH_CHECKOUT.md) for the implementation record.
 
 - **Log in:** header → "Account & Lists". Redirects to Keycloak at `/auth`, back
   to the storefront with a token.
@@ -77,9 +87,32 @@ RPCs. Customer PII is never browsable — `customer-svc` exposes only the
 
 Test logins (lab only): `ada` / `Password123!` (customer),
 `nwgadgets` / `Seller123!` (seller) — both native Keycloak (CIAM) users. The
-**employee/global-admin identities now live in FreeIPA (Tier 0)** and federate into
-Keycloak over LDAP: `gadmin` / `$IPA_ADMIN_PASSWORD` and `finance.clerk` / `Staff123!`.
+**employee/global-admin identities live in FreeIPA (Tier 0)**: `gadmin` /
+`$IPA_ADMIN_PASSWORD` and `finance.clerk` / `Staff123!`. LDAP federation into
+Keycloak is configured but employee login is still pending the attribute-mapper fix
+tracked in the Tier 0 implementation record.
 Or register a fresh customer from the storefront.
+
+## Internal identity and privileged access
+
+FreeIPA is the authoritative workforce directory; Keycloak is the customer/seller
+CIAM workload. The systemd-based PAW enrolls as an IPA client and runs SSSD,
+oddjobd, and SSHD. FreeIPA is health-checked before the PAW starts, preventing the
+first-install race that previously left the PAW in break-glass-only mode.
+
+- `gadmin` means **Global Administrator**. It is a FreeIPA identity in
+  `tier0-admins`, not a local PAW account and not a customer/seller account.
+- `finance.clerk` is a workforce/help-desk identity and is intentionally denied
+  Tier 0 SSH access.
+- `BASTION_USER` is the local emergency account; it is not the normal admin path.
+- HBAC rule `tier0-access` allows `tier0-admins` to use `sshd` on
+  `ipa.shopmock.lab` and `paw.shopmock.lab`; FreeIPA's default `allow_all` is disabled.
+- A FreeIPA sudo rule exists for future controlled elevation, but the current HBAC
+  policy authorizes `sshd` only. Sudo remains denied until separately reviewed.
+
+Verified on the rootless-Podman VM (2026-08-22): FreeIPA healthy; PAW enrollment
+successful and persistent across restart; `gadmin` allowed by HBAC;
+`finance.clerk` denied; storefront, catalog, Keycloak, and seller health routes HTTP 200.
 
 ## Seller backend (Tier 2)
 

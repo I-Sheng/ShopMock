@@ -1,0 +1,13 @@
+[Unit]
+Description=Configure ShopMock PAW and enroll it into FreeIPA
+Wants=network-online.target
+After=network-online.target
+Before=sshd.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/entrypoint.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

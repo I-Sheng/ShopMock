@@ -357,7 +357,6 @@ services:
       - --ds-password=${IPA_DM_PASSWORD}     # 389DS Directory Manager — an extra crown jewel
       - --admin-password=${IPA_ADMIN_PASSWORD}
       - --no-ntp
-      - --no-dns                             # clients resolve ipa.shopmock.lab via net aliases
     environment:
       IPA_SERVER_HOSTNAME: ipa.shopmock.lab
     volumes:
@@ -371,6 +370,21 @@ services:
     cgroup: host
     stop_grace_period: 30s
     restart: unless-stopped
+    # Healthy means the full FreeIPA installation has completed, not merely
+    # that the systemd container is running. The PAW needs both the directory
+    # services and the published CA certificate before client enrollment.
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          ipactl status >/dev/null 2>&1 &&
+          curl -fsk --max-time 10
+          https://localhost/ipa/config/ca.crt
+          -o /dev/null
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 20m
     ports:
       - "8443:443"                           # IPA Web UI — mgmt-only (treat like Keycloak admin)
     networks:
@@ -398,11 +412,24 @@ services:
       BASTION_USER: ${BASTION_USER}                # break-glass local account
       BASTION_PASSWORD: ${BASTION_PASSWORD}
     ports: ["22:2222"]              # public SSH on standard port 22 → container 2222
+    tmpfs:
+      - /run
+      - /tmp
+    security_opt:
+      - seccomp:unconfined
+    cgroup: host
+    stop_grace_period: 30s
     # bastion_net is the PAW's public front door (non-internal, so the host can publish :22);
     # tier0_net is its only path to the FreeIPA DC; mgmt_net keeps its reach to Keycloak/Vault
     # admin surfaces. Which admins may actually log in is decided by IPA HBAC, not this container.
     networks: [bastion_net, tier0_net, mgmt_net]
-    depends_on: [ipa]
+    # On a normal deployment, wait for the completed FreeIPA installation
+    # before starting the PAW. `required: false` retains the ability to start
+    # the PAW in degraded break-glass mode when FreeIPA is unavailable.
+    depends_on:
+      ipa:
+        condition: service_healthy
+        required: false
 
   # ---------------- SIEM (on by default) ----------------
   # Wazuh manager starts with the core stack. The full single-node bundle

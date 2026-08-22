@@ -145,6 +145,91 @@ echo "deploy: reloading PostgREST schema caches..."
 "${COMPOSE[@]}" exec -T orders-db   psql -U postgres -d orders   -c "NOTIFY pgrst, 'reload schema';"
 "${COMPOSE[@]}" exec -T finance-db  psql -U postgres -d finance  -c "NOTIFY pgrst, 'reload schema';"
 
+# Keep browser redirects environment-specific without opening Keycloak to
+# arbitrary redirect hosts. Compose reads .env itself, but this script does not,
+# so load only PUBLIC_ORIGIN explicitly. A trailing slash is normalized away.
+public_origin="${PUBLIC_ORIGIN:-$(grep '^PUBLIC_ORIGIN=' .env | cut -d= -f2- || true)}"
+# Compose accepts a simply quoted value; normalize that form before validating.
+if [[ "$public_origin" == \"*\" ]] || [[ "$public_origin" == \'*\' ]]; then
+  public_origin="${public_origin:1:${#public_origin}-2}"
+fi
+public_origin="${public_origin%/}"
+if [ -z "$public_origin" ]; then
+  echo "deploy: ERROR: PUBLIC_ORIGIN is not set and was not found in .env" >&2
+  exit 1
+fi
+if [[ ! "$public_origin" =~ ^https?://(\[[0-9A-Fa-f:]+\]|[A-Za-z0-9.-]+)(:[0-9]{1,5})?$ ]]; then
+  echo "deploy: ERROR: PUBLIC_ORIGIN must be an http(s) origin with no path (got '$public_origin')" >&2
+  exit 1
+fi
+
+echo "deploy: waiting for Keycloak before applying PUBLIC_ORIGIN=$public_origin..."
+kcadm=/opt/keycloak/bin/kcadm.sh
+kcadm_config=/tmp/shopmock-kcadm.config
+cleanup_kcadm() {
+  "${COMPOSE[@]}" exec -T identity rm -f "$kcadm_config" >/dev/null 2>&1 || true
+}
+trap cleanup_kcadm EXIT
+keycloak_ready=
+for _ in $(seq 1 60); do
+  if "${COMPOSE[@]}" exec -T identity sh -c \
+       'exec /opt/keycloak/bin/kcadm.sh config credentials \
+          --config /tmp/shopmock-kcadm.config \
+          --server http://127.0.0.1:8080/auth --realm master \
+          --user "$KEYCLOAK_ADMIN" --password "$KEYCLOAK_ADMIN_PASSWORD"' \
+       >/dev/null 2>&1; then
+    keycloak_ready=1
+    break
+  fi
+  sleep 2
+done
+if [ -z "$keycloak_ready" ]; then
+  echo "deploy: ERROR: Keycloak never became ready for client redirect configuration" >&2
+  # Emit one actionable error after the quiet readiness retries.
+  "${COMPOSE[@]}" exec -T identity sh -c \
+    'exec /opt/keycloak/bin/kcadm.sh config credentials \
+       --config /tmp/shopmock-kcadm.config \
+       --server http://127.0.0.1:8080/auth --realm master \
+       --user "$KEYCLOAK_ADMIN" --password "$KEYCLOAK_ADMIN_PASSWORD"' || true
+  exit 1
+fi
+
+# These lists are deliberate desired state, not a merge of ad-hoc console
+# changes. Keep realm seed defaults and the configured environment origin.
+for client in storefront seller-dashboard; do
+  client_uuid=$("${COMPOSE[@]}" exec -T identity "$kcadm" get clients \
+    --config "$kcadm_config" -r shopmock -q "clientId=$client" \
+    --fields id --format csv --noquotes)
+  client_uuid="${client_uuid##*$'\n'}"
+  client_uuid="${client_uuid//$'\r'/}"
+  if [[ ! "$client_uuid" =~ ^[0-9a-fA-F-]{36}$ ]]; then
+    echo "deploy: ERROR: invalid UUID for Keycloak client '$client' (got '$client_uuid')" >&2
+    exit 1
+  fi
+
+  if [ "$public_origin" = http://localhost ] && [ "$client" = storefront ]; then
+    redirects='["http://localhost/*"]'
+  elif [ "$public_origin" = http://localhost ]; then
+    redirects='["http://localhost/seller/*","http://localhost/silent-check-sso.html"]'
+  elif [ "$client" = storefront ]; then
+    redirects="[\"http://localhost/*\",\"$public_origin/*\"]"
+  else
+    redirects="[\"http://localhost/seller/*\",\"http://localhost/silent-check-sso.html\",\"$public_origin/seller/*\",\"$public_origin/silent-check-sso.html\"]"
+  fi
+  if [ "$public_origin" = http://localhost ]; then
+    origins='["http://localhost","+"]'
+  else
+    origins="[\"http://localhost\",\"$public_origin\",\"+\"]"
+  fi
+
+  "${COMPOSE[@]}" exec -T identity "$kcadm" update "clients/$client_uuid" \
+    --config "$kcadm_config" -r shopmock \
+    -s "redirectUris=$redirects" -s "webOrigins=$origins" >/dev/null
+  echo "deploy: Keycloak client '$client' allows redirects for $public_origin"
+done
+cleanup_kcadm
+trap - EXIT
+
 # FreeIPA (Tier-0 control plane) — apply the tier groups + HBAC each deploy (like the DB role
 # blocks, the in-container bootstrap is idempotent). Deliberately NON-FATAL: FreeIPA is the
 # heavy new component and its first install is slow; a not-ready DC must WARN, not abort the

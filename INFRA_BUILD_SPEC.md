@@ -3,7 +3,7 @@
 **Companion to:** `ShopMock_Company_Infra.md` (design) — this document turns that
 design into a **runnable Docker stack** and a **seed-data plan**.
 
-I-Sheng Lee | Capstone: Autonomous AI-Driven Cyber Attacks | June 2026
+I-Sheng Lee | Capstone: Autonomous AI-Driven Cyber Attacks | Updated August 2026
 
 ---
 
@@ -13,22 +13,19 @@ The design doc describes *what* ShopMock should look like (assets, tiers, blast
 radius, segmentation). This spec describes *how to actually stand it up* as a
 local, attackable lab target:
 
-1. **Every node in the DFD maps to a real, pullable container image** — no
-   bespoke application code. Where a "service" has no off-the-shelf product, it
-   is realized with a generic-but-real component (`postgrest` over a database,
-   `nginx` for the storefront), so the running system is honest about what it is:
-   a mock with a real attack surface, not a hand-written app.
+1. **Every node in the DFD maps to a real running component.** Infrastructure and
+   data APIs use pinned upstream images where practical; the customer and seller
+   journeys use small Next.js/Django components where authentication, ownership,
+   and orchestration logic cannot be represented honestly by configuration alone.
 2. **Network segments from §4–5 of the design become real Docker networks**, so
    the tier/blast-radius boundaries are enforced by the runtime, not just on paper.
 3. **Seed data is explicit**: every piece of data a human must add by hand is
    listed with its source file and its destination datastore (§3 here).
 
-> **Design choice (stated honestly):** business "services" (catalog, order,
-> checkout, seller, internal-ops) are backed by **PostgREST** auto-exposing their
-> owning database as a REST API. This keeps the data-behind-services invariant
-> from design §6a real, gives a genuine HTTP attack surface, and needs zero app
-> code. The trade-off: business logic is thin. For the capstone's purpose
-> (attack-surface realism + clean segmentation) this is the right altitude.
+> **Design choice (stated honestly):** catalog/order/finance/customer data APIs are
+> primarily PostgREST, while Django owns the cross-database checkout and seller
+> write boundaries and Next.js supplies the browser experience. Business logic is
+> intentionally thin, but authentication and data ownership are explicit.
 
 ---
 
@@ -41,10 +38,10 @@ can `docker pull` today.
 | --- | --- | --- | --- |
 | Edge / reverse proxy + WAF | DMZ ingress | `traefik:v3.0` | Single ingress; routes to storefront/services; TLS + WAF middleware |
 | WAF ruleset (optional, inline) | DMZ | `owasp/modsecurity-crs:nginx` | OWASP CRS in front of storefront |
-| Storefront frontend | DMZ / Tier 2 | `nginx:1.27-alpine` | Static web frontend only; **not** a proxy — routing is traefik's job |
+| Storefront frontend | DMZ / Tier 2 | built from `./storefront` (Next.js) | Customer and Seller Central UI; Traefik remains the only edge router |
 | Search service | DMZ / Tier 2 | `opensearchproject/opensearch:2.13.0` | Product search index (catalog mirror) |
 | Search dashboard (ops) | DMZ / Tier 2 | `opensearchproject/opensearch-dashboards:2.13.0` | Search admin UI |
-| Identity provider (customer CIAM) | **Tier 1** | `quay.io/keycloak/keycloak:24.0` | Customer/seller OIDC/SSO login; **federates employees from FreeIPA**. A workload, *not* the control plane |
+| Identity provider (customer CIAM) | **Tier 1** | `quay.io/keycloak/keycloak:24.0` | Customer/seller OIDC/SSO login; workforce LDAP federation is configured but mapper repair remains. A workload, *not* the control plane |
 | Catalog service | Tier 1 | `postgrest/postgrest:v12.2.0` | REST API over **catalog-db** |
 | Order service | Tier 1 | `postgrest/postgrest:v12.2.0` | REST API over **orders-db** |
 | Checkout / Payment service | Tier 1 | `postgrest/postgrest:v12.2.0` | REST API over **finance-db** (mock PCI scope); `record_payment` RPC |
@@ -59,11 +56,11 @@ can `docker pull` today.
 | Financial / Wallet DB | Data backend | `postgres:16-alpine` | Wallets, tokenized cards, transactions (isolated) |
 | Secrets / Key Mgmt (HSM/Vault) | SOC | `hashicorp/vault:1.16` | DB creds, API keys, signing keys |
 | SIEM manager | SOC | `wazuh/wazuh-manager:4.8.0` | Log ingest, detection rules |
-| SIEM indexer | SOC | `wazuh/wazuh-indexer:4.8.0` | Event storage |
-| SIEM dashboard | SOC | `wazuh/wazuh-dashboard:4.8.0` | Analyst console |
-| Log shipper (per host) | all segments | `fluent/fluent-bit:3.0` | Ships container logs → SIEM |
+| SIEM indexer | SOC | `wazuh/wazuh-indexer:4.8.0` | Optional/full-bundle event storage; not in the current base stack |
+| SIEM dashboard | SOC | `wazuh/wazuh-dashboard:4.8.0` | Optional/full-bundle analyst console; not in the current base stack |
+| Log shipper (per host) | all segments | `fluent/fluent-bit:3.0` | Planned per-host log shipping; not in the current base stack |
 | **FreeIPA DC (identity/PKI)** | **Tier 0 — control plane** | `quay.io/freeipa/freeipa-server:almalinux-9` | The genuine "key of the kingdom": 389DS LDAP + Kerberos KDC + Dogtag PKI/CA + HBAC. The AD-equivalent workforce/admin directory |
-| PAW / jump host | **Access plane** (not Tier 0) | built from `./paw` (AlmaLinux 9 + ipa-client) | Controlled path *up* to Tier 0; IPA-enrolled so admin SSH auth is Kerberos governed by HBAC |
+| PAW / jump host | **Access plane** (not Tier 0) | built from `./paw` (AlmaLinux 9 + systemd + ipa-client) | Controlled path *up* to Tier 0; runs SSSD/oddjobd/SSHD and is enrolled only after FreeIPA reports healthy |
 | Global Admin console | Access plane | *(Keycloak admin + Vault + IPA Web UI, reached via the PAW)* | Management-plane admin surfaces |
 
 **Why these specific products**
@@ -71,9 +68,9 @@ can `docker pull` today.
 - **FreeIPA** is the **Tier-0 control plane** — the open-source Active-Directory
   equivalent (389DS LDAP + Kerberos KDC + Dogtag PKI/CA + HBAC). It *is* the
   workforce/admin "identity system" the design calls the key of the kingdom, and it
-  maps 1:1 onto Microsoft Tier 0 = "the directory / domain controllers / PKI". It also
-  provides the canonical Tier-0 attack surface (Kerberos TGTs, Kerberoasting, a
-  DCSync-analog, Dogtag cert abuse) that a CIAM stand-in cannot.
+  approximates the directory/Kerberos/PKI responsibilities of Microsoft Tier 0.
+  It provides a Linux-native privileged identity attack surface, but it is not a
+  substitute for Windows-specific AD DS, NTLM, Group Policy, or AD CS testing.
 - **Keycloak** is a genuine identity provider (OIDC, SSO) used here as the **customer
   CIAM workload (Tier 1)** — shopper/seller login. It **federates employees from
   FreeIPA** over LDAP, so workforce identity chains up to Tier 0 while customer identity
@@ -83,7 +80,8 @@ can `docker pull` today.
 - **OpenSearch** is a real search engine; mirroring catalog into it reproduces
   the common "search index leaks data the API wouldn't" attack surface.
 - **HashiCorp Vault** is a real secrets manager; it models the HSM/Vault SOC node.
-- **Wazuh** is a real open-source SIEM/XDR (manager + indexer + dashboard).
+- **Wazuh** supplies the deployed manager. The indexer, dashboard, and per-host
+  shipping layer remain optional follow-on work rather than current-stack claims.
 - **Traefik** + **OWASP ModSecurity CRS** give a real edge/WAF.
 
 ---
@@ -110,6 +108,17 @@ directory/PKI that governs who administers everything); *management plane* = the
 surfaces of workloads (Keycloak admin, Vault, IPA Web UI) on `mgmt_net`; *access plane* =
 the PAW, the gated path an admin traverses *up* to Tier 0. The bastion is the access plane,
 never Tier 0 itself.
+
+### Verified Tier 0 state (2026-08-22)
+
+- FreeIPA health requires running IPA services plus a retrievable CA certificate.
+- Compose holds initial PAW startup until FreeIPA is healthy.
+- The PAW runs systemd as PID 1 and supervises SSSD, oddjobd, and SSHD.
+- `gadmin` resolves through SSSD and is allowed to the PAW by `tier0-access`.
+- `finance.clerk` resolves through SSSD but is denied Tier 0 SSH by HBAC.
+- Enrollment and identity resolution persist across a PAW container restart.
+- Workforce login through Keycloak remains a separate open item: LDAP finds the
+  FreeIPA DN but returns no usable mapped username attributes.
 
 Enforced invariants (matching design §6a):
 

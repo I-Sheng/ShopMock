@@ -96,7 +96,9 @@ The script is idempotent — safe to re-run on every push. It:
 5. re-applies the RPC functions and the `internal_backend` +
    `seller_backend` DB roles (initdb scripts only run on fresh volumes, so
    deploys onto existing volumes must do this explicitly);
-6. `NOTIFY`s PostgREST to reload schema caches.
+6. `NOTIFY`s PostgREST to reload schema caches;
+7. updates environment-specific Keycloak redirect origins;
+8. waits for FreeIPA and re-applies the idempotent users/groups/HBAC bootstrap.
 
 A healthy run starts like:
 
@@ -140,11 +142,17 @@ podman compose exec -e IPA_ADMIN_PASSWORD="$(grep ^IPA_ADMIN_PASSWORD= .env | cu
 # Expect: employees gadmin + finance.clerk present; hbac rule 'tier0-access' enabled,
 # 'allow_all' disabled — i.e. Tier 0 is deny-by-default, tier0-admins only.
 
-# Federation round-trip: gadmin authenticates against FreeIPA *through* Keycloak.
-curl -s http://127.0.0.1:5002/auth/realms/shopmock/protocol/openid-connect/token \
-  -d grant_type=password -d client_id=seller-dashboard \
-  -d username=gadmin -d password="$(grep ^IPA_ADMIN_PASSWORD= .env | cut -d= -f2-)" | jq -r .access_token | head -c 40
+# PAW: systemd supervises enrollment and identity services.
+podman compose exec paw systemctl is-active shopmock-paw-setup sssd oddjobd sshd
+podman compose exec paw id gadmin
+podman compose exec paw sssctl user-checks -a acct -s sshd gadmin
+podman compose exec paw sssctl user-checks -a acct -s sshd finance.clerk
+# Expected: services active; gadmin PAM success; finance.clerk PAM denied.
 ```
+
+Workforce login through Keycloak is not yet a deployment acceptance check. The
+LDAP provider reaches FreeIPA and finds `gadmin`, but explicit attribute/group
+mappers still need repair. Native customer and seller authentication remains valid.
 
 Browser: `http://shopmock.uwb.edu/isheng07/` (storefront) and
 `…/isheng07/seller` (Seller Central). FreeIPA Web UI: tunnel `:8443` through the PAW.
@@ -169,7 +177,8 @@ volumes**. After changing anything under `seed/`, reseed with
 | Everything returns `404 page not found` on `127.0.0.1:5002` | that page is Traefik's "no router matched" — the Docker provider registered nothing, almost always because SELinux denies the edge access to the mounted podman socket (`user_tmp_t`). The vm override sets `security_opt: label=disable` on the edge for this; confirm with `podman compose logs edge \| grep -i "permission\|provider"` and check `curl -s http://127.0.0.1:8088/api/http/routers \| head` lists routers after restarting the edge. |
 | `deploy: WARN FreeIPA not ready — skipping Tier-0 bootstrap` | the DC's first install is slow (several minutes) or failed. It is **non-fatal** — the rest of the stack is fine. Watch `podman compose logs -f ipa`; once it prints `FreeIPA server configured`, just re-run `bash scripts/deploy.sh` to apply the bootstrap. If it never configures: FreeIPA needs **cgroups v2** and refuses `--privileged`; confirm `podman info \| grep cgroupVersion` says `v2` and that the host has ~2 GB free for it. |
 | FreeIPA container exits / `systemd` errors on boot | the systemd-in-container flags need tuning for this host. The service sets `cgroup: host`, `security_opt: seccomp:unconfined`, and tmpfs `/run`+`/tmp`; on some rootless-podman hosts you also need `podman ... --systemd=always`. This is the one bring-up step that may need host-specific iteration — see PLAN_TIER0_FREEIPA.md. |
-| PAW SSH works but domain (IPA) logins are refused / no HBAC | the PAW enrolls into FreeIPA **best-effort** at boot; if the DC was not up yet it serves only the `BASTION_USER` break-glass account. Re-create it after the DC is ready: `podman compose up -d --force-recreate paw`, then verify with `podman compose exec paw id gadmin`. HBAC then governs who may log in. |
+| PAW starts in break-glass-only mode | Confirm `ipa` is healthy, then rebuild/recreate the PAW: `podman compose up -d --no-deps --build --force-recreate paw`. Check `journalctl -u shopmock-paw-setup` inside the PAW. The PAW runs systemd and waits for a valid IPA CA before enrollment. |
+| `gadmin` resolves but SSH account checks deny it | Run `ipa hbacrule-show tier0-access`; the rule must list `ipa.shopmock.lab`, `paw.shopmock.lab`, and service `sshd`. Re-run `seed/ipa/bootstrap.sh`, clear SSSD cache, and retest. |
 
 ## Step-by-step recovery: seed permission crash-loop
 

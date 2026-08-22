@@ -4,7 +4,7 @@
 
 I-Sheng Lee | Capstone: Autonomous AI-Driven Cyber Attacks
 
-*June 2026 | University of Washington*
+*June 2026 | Updated August 2026 | University of Washington*
 
 # **1. Assets (Crown Jewels)**
 
@@ -15,7 +15,8 @@ all other assets.
 
 | **Asset**                            | **Description**                                                                                                |
 | ------------------------------------ | -------------------------------------------------------------------------------------------------------------- |
-| **Identity System**                  | Login credentials, session tokens, SSO. The key of the kingdom — compromise enables access to everything else. |
+| **Workforce Identity Control Plane** | FreeIPA employee/admin identities, Kerberos, LDAP, PKI, HBAC, and privileged groups. Tier 0: compromise can control internal access. |
+| **Customer/Seller Identity (CIAM)**  | Keycloak accounts, OIDC tokens, sessions, and application roles. Public-facing identity workload, separate from the workforce directory. |
 | **Customer Info**                    | Accounts, order history, shipping addresses. Primary PII exposure surface.                                     |
 | **Money**                            | Payments, stored cards/wallet, revenue data. PCI-DSS scope; highest regulatory risk.                           |
 | **Employee PII**                     | HR records, payroll, benefits. Internal sensitive data separate from customer PII.                             |
@@ -44,6 +45,23 @@ the deployment model.
 Systems are classified into tiers based on blast radius — the scope of
 damage if that system is compromised. Tier 0 is the highest-value and
 hardest-to-reach; Tier 2 is the most exposed but lowest-impact.
+
+## **3.1 Two Identity Domains**
+
+ShopMock deliberately separates public marketplace identities from internal
+workforce identities:
+
+| Identity domain | Authority | Subjects | Purpose |
+| --- | --- | --- | --- |
+| Customer/seller CIAM | Keycloak (Tier 1 workload) | Customers, sellers, marketplace roles | OIDC login and API claims; no internal host access |
+| Workforce/control plane | FreeIPA (Tier 0) | Employees, help desk, server admins, `gadmin` | Kerberos/LDAP identity, PKI, HBAC, host and privileged policy |
+
+`gadmin` is the lab's **Global Administrator** identity: a FreeIPA member of
+`tier0-admins`, permitted to enter the PAW and control-plane hosts through HBAC.
+It is not a local PAW user and must not be used for shopping, seller activity,
+email, or routine employee work. Department groups such as HR and Finance are
+business roles; they are not security tiers. IT privileges are separated into
+help-desk, server-administration, and Tier 0 identity-administration groups.
 
 <table>
 <thead>
@@ -122,19 +140,33 @@ service.
 
 The diagram below illustrates how containers are distributed across
 network segments. Each segment is accessible only through defined
-ingress paths, with Tier 0 reachable exclusively via the bastion/admin
+ingress paths, with Tier 0 reachable exclusively via the PAW/admin
 route.
 
-<table>
-<tbody>
-<tr class="odd">
-<td><p><em>[Network Distribution Diagram — to be inserted]</em></p>
-<p>External → DMZ → Tier 2 Segment → Tier 1 Segment → Tier 0 Control Plane (FreeIPA DC), with Shared DBs behind Tier 1/2 services. Admins reach Tier 0 only through the <strong>PAW</strong> (access plane); the management plane (Keycloak admin, Vault, IPA Web UI) sits alongside on <code>mgmt_net</code>. This realizes the three planes of Microsoft's Enterprise Access Model — control (Tier 0 = the directory/PKI), management (workload admin surfaces), and access (the PAW). Keycloak is the customer <strong>CIAM</strong> workload (Tier 1) and federates employees from FreeIPA.</p></td>
-</tr>
-</tbody>
-</table>
+![ShopMock network distribution](./media/image1.png)
 
-# ![](./media/image1.png)**6. Robustness Analysis**
+External traffic enters through the DMZ/edge and reaches Tier 2 or Tier 1 APIs;
+shared databases remain behind their owning services. Administrators reach the
+FreeIPA Tier 0 control plane through the PAW. Management surfaces such as Keycloak
+admin, Vault, and the IPA Web UI use the management path. Keycloak remains the
+customer/seller CIAM workload; workforce federation from FreeIPA is configured but
+not yet accepted as complete.
+
+## **5.1 Verified Privileged-Access Path (August 2026)**
+
+The implemented PAW runs systemd and supervises SSSD, oddjobd, and SSHD. Compose
+starts it only after FreeIPA passes a health check covering IPA service status and
+CA-certificate availability. FreeIPA's default `allow_all` HBAC rule is disabled.
+The explicit `tier0-access` rule targets `ipa.shopmock.lab` and
+`paw.shopmock.lab` for the `sshd` service: `gadmin` is allowed and
+`finance.clerk` is denied. Enrollment and identity resolution persist across a
+PAW restart. The local `BASTION_USER` remains a break-glass path only.
+
+Keycloak-to-FreeIPA workforce federation is a separate, incomplete integration:
+LDAP connectivity and DN discovery work, but explicit user/group mapper repair is
+still required. This does not affect native customer or seller authentication.
+
+# **6. Robustness Analysis**
 
 This section assesses the strength of the ShopMock design, the
 assumptions it depends on, and how sensitive the security posture is to
@@ -153,7 +185,7 @@ those assumptions failing.
     their owning service, not the frontend, blocking direct data
     exfiltration from an exposed web tier.
 
-  - **Bastion/admin path for Tier 0:** Identity/admin is reachable only
+  - **PAW/admin path for Tier 0:** Identity/admin is reachable only
     through a controlled path, shrinking the attack surface for the
     highest-value target.
 
@@ -213,13 +245,13 @@ isolation.
 | **Blast-radius containment**           | Tier 0/1/2 segmentation; Tier 2 cannot reach Tier 0/1                             | Blast-radius containment via least-privilege IAM and per-service isolation is a documented AWS and cloud-security practice; limiting identity permissions limits what attackers can reach. \[8\] |
 | **Data-behind-services**               | DBs reachable only through their owning service, never directly from the web tier | AWS Prescriptive Guidance: 'Individual data stores cannot be directly accessed by other microservices — persistent data is accessed only by APIs.' \[9\]                                         |
 | **Horizontal scaling**                 | Container replication per tier without changing security boundaries               | Large e-commerce platforms use microservice-level horizontal scaling to handle Black Friday surges without changing security boundaries, fine-grained per-service. \[10\]                        |
-| **Operational layers (honest caveat)** | Not yet specified in this design                                                  | 24/7 SOC, automated anomaly detection, dedicated red teams, hardware roots of trust, edge DDoS scrubbing — operational maturity, not structural difference.                                      |
+| **Operational layers (honest caveat)** | Wazuh manager is present; full SIEM storage/dashboard, 24/7 operations, IR, and DDoS controls are not implemented | Large retailers operate continuous SOC, detection, IR, threat intelligence, red teams, hardware roots of trust, and edge DDoS controls. |
 
 <table>
 <tbody>
 <tr class="odd">
 <td><p><strong>Honest Caveat</strong></p>
-<p>ShopMock's architecture is structurally equivalent to a large retailer's. The gap is operational maturity, not structural design: Amazon's strength is roughly 80% operations (SOC, detection, IR, threat intel, red teams) plus identity maturity layered on top of the same architectural primitives. Closing that gap is a roadmap item, not a redesign.</p></td>
+<p>ShopMock borrows recognizable large-retailer primitives—service decomposition, identity-centered control, least privilege, and data isolation—but it is a single-host educational lab, not structurally or operationally equivalent to a production retailer. Missing capabilities include multi-region resilience, mature CI/CD controls, continuous detection and response, hardware roots of trust, and production-scale identity governance.</p></td>
 </tr>
 </tbody>
 </table>
