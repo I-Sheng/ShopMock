@@ -93,14 +93,22 @@ services:
       traefik.docker.network: sandboxnet
 
   oe-dashboard:
-    networks: !override [sandboxnet]
-    volumes: !override
-      - ${DOCKER_SOCK:?set DOCKER_SOCK in .env to the podman socket path}:/var/run/docker.sock:ro
-    # same SELinux situation as the edge: the podman socket is user_tmp_t
-    security_opt:
-      - label=disable
+    networks: !override [sandboxnet, ops_net]
     labels:
       traefik.docker.network: sandboxnet
+
+  # The socket reader, not the web tier, is the service that needs the podman
+  # socket and therefore the SELinux exemption. On the flat sandboxnet the proxy
+  # loses its network isolation like everything else here — its own request
+  # allowlist (read-only, POST=0) is what still bounds it.
+  oe-socket-proxy:
+    networks: !override [ops_net]
+    volumes: !override
+      - ${DOCKER_SOCK:?set DOCKER_SOCK in .env to the podman socket path}:/var/run/docker.sock:ro
+    # The dashboard also joins sandboxnet for Traefik, but the socket proxy stays
+    # only on the private ops_net so other VM services cannot inspect containers.
+    security_opt:
+      - label=disable
 
   customer-db:
     networks: !override [sandboxnet]

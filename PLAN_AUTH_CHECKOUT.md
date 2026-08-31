@@ -54,8 +54,12 @@ same-origin with the storefront (no CORS), Traefik remains the single ingress.
      `webOrigins: ["http://localhost"]`.
    - Add a protocol mapper on the `storefront` client emitting a top-level
      `"role": "customer"` claim in access tokens (consumed by PostgREST in
-     Phase 2). Assign new registrations the `customer` role via the realm's
-     default group (`/customers`) so self-registered users get the claim too.
+     Phase 2). This client-scoped claim is what authorizes checkout; it does not
+     depend on the caller carrying the `customer` realm role. The former realm
+     default group (`/customers`) was removed after LDAP federation because it
+     also assigned every workforce import the customer role. Seeded customers
+     retain explicit `/customers` membership; new registrations still receive
+     the required top-level claim from the storefront client.
 
 **Verify:** `curl http://localhost/auth/realms/shopmock/.well-known/openid-configuration`
 returns the realm; `http://localhost/auth/admin/` is blocked at the edge.

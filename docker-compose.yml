@@ -237,24 +237,62 @@ services:
       traefik.http.middlewares.seller-backend-strip.stripprefix.prefixes: "/api/seller-backend"
       traefik.http.services.seller-backend.loadbalancer.server.port: "8000"
 
-  oe-dashboard:                     # OE / ops overview — container health, route probes, DB stats
+  oe-dashboard:                     # IT operations console — ShopMock container health
     build: ./oe-dashboard
     restart: unless-stopped
     environment:
-      OE_USERNAME: ${OE_USERNAME}
-      OE_PASSWORD: ${OE_PASSWORD}
-      PG_SUPERUSER_PASSWORD: ${PG_SUPERUSER_PASSWORD}
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro   # read-only: container list/status
-    networks: [tier2_net, data_net]   # tier2: reached by edge + probes via edge; data: DB stats
-    depends_on: [catalog-db, orders-db, customer-db, finance-db]
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY}
+      PGRST_JWT_SECRET: ${PGRST_JWT_SECRET}    # same pinned realm JWK as PostgREST
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-http://localhost}
+      # Optional overrides; the defaults below match the realm seed. Setting
+      # OE_ALLOWED_ISSUERS replaces the PUBLIC_ORIGIN-derived issuer list.
+      OE_ALLOWED_ISSUERS: ${OE_ALLOWED_ISSUERS:-}
+      OE_OIDC_REALM: ${OE_OIDC_REALM:-shopmock}
+      OE_OIDC_CLIENT_ID: ${OE_OIDC_CLIENT_ID:-it-operations}
+      OE_REQUIRED_ROLE: ${OE_REQUIRED_ROLE:-it-ops}
+      OE_PROJECT_NAME: ${OE_PROJECT_NAME:-shopmock}
+      OE_CONTAINER_API: ${OE_CONTAINER_API:-http://oe-socket-proxy:2375}
+    # No socket and no database: this container terminates browser requests, so
+    # it holds nothing an XSS/RCE could turn into runtime control. It reads
+    # status over ops_net from the proxy below.
+    networks: [tier2_net, ops_net]
+    depends_on: [oe-socket-proxy]
     labels:
       traefik.enable: "true"
       traefik.docker.network: shopmock_tier2_net
       traefik.http.routers.oe.rule: "PathPrefix(`/oe`)"
-      traefik.http.routers.oe.middlewares: "oe-strip"
+      traefik.http.routers.oe.middlewares: "oe-slash,oe-strip"
+      # /oe -> /oe/ first, so the page's relative asset URLs resolve under /oe/.
+      traefik.http.middlewares.oe-slash.redirectregex.regex: "^(https?://[^/]+)/oe$$"
+      traefik.http.middlewares.oe-slash.redirectregex.replacement: "$${1}/oe/"
       traefik.http.middlewares.oe-strip.stripprefix.prefixes: "/oe"
       traefik.http.services.oe.loadbalancer.server.port: "8000"
+
+  # The only container that mounts the runtime socket. HAProxy in front of the
+  # Docker-compatible API with a request allowlist: CONTAINERS=1 permits the
+  # read-only /containers endpoints and POST=0 rejects every mutating verb, so
+  # exec/create/start/stop and the /images, /volumes, /networks, /secrets and
+  # /info surfaces are unreachable even with full control of oe-dashboard.
+  #
+  # Residual risk, stated plainly: CONTAINERS=1 also permits
+  # GET /containers/{id}/json, which would return Config.Env. Nothing in this
+  # stack calls it (ops/docker_client.py issues exactly one hard-coded request),
+  # but the proxy cannot express a single-endpoint policy. Reaching it requires
+  # code execution inside oe-dashboard *and* ops_net access. Removing the
+  # remainder needs a purpose-built reader; tracked in PLAN_OE_DASHBOARD.md.
+  oe-socket-proxy:
+    image: tecnativa/docker-socket-proxy:0.3.0
+    restart: unless-stopped
+    environment:
+      CONTAINERS: "1"     # GET /containers/... only
+      POST: "0"           # no mutating requests at all
+      EVENTS: "0"
+      PING: "1"
+      VERSION: "1"
+      LOG_LEVEL: warning
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks: [ops_net]   # reachable only by oe-dashboard
 
   # ---------------- Data backend (private, internal network only) ----------------
   customer-db:                      # Customer PII — no public API (strictest isolation)
@@ -448,6 +486,7 @@ networks:
   data_net:   { internal: true }
   soc_net:    { internal: true }
   mgmt_net:   { internal: true }
+  ops_net:    { internal: true }   # oe-dashboard <-> its read-only socket proxy, nothing else
 
 volumes:
   customer-data: {}

@@ -13,7 +13,8 @@ rationale, service-to-image map, and seed-data plan, see
 | [`INFRA_BUILD_SPEC.md`](INFRA_BUILD_SPEC.md) | Running service, datastore, network, and seed-data mapping |
 | [`DEPLOY.md`](DEPLOY.md) | Rootless-Podman VM deployment and recovery procedures |
 | [`PLAN_AUTH_CHECKOUT.md`](PLAN_AUTH_CHECKOUT.md) | Implemented customer authentication and checkout record |
-| [`PLAN_TIER0_FREEIPA.md`](PLAN_TIER0_FREEIPA.md) | Tier 0/PAW implementation record and remaining federation work |
+| [`PLAN_TIER0_FREEIPA.md`](PLAN_TIER0_FREEIPA.md) | Tier 0/PAW implementation and verified workforce federation |
+| [`PLAN_OE_DASHBOARD.md`](PLAN_OE_DASHBOARD.md) | IT-only live container-health dashboard and authorization design |
 
 ## Quick start
 
@@ -50,7 +51,7 @@ This destroys lab data and recreates all seed state; do not use it for routine u
 | Seller API (Tier 2) | http://localhost/api/seller/sellers | PostgREST (read-only browse) |
 | Seller Backend API (Tier 2) | http://localhost/api/seller-backend/listings | Django; seller token required (see below) |
 | Internal Ops API (Tier 2) | http://localhost/api/ops/feature_flags | PostgREST |
-| OE dashboard | Not in the current checkout | Optional component; the referenced `./oe-dashboard` build context is absent and locally disabled |
+| IT Operations dashboard | http://localhost/oe/ | IT-only live container health; Keycloak `it-operations` client + FreeIPA `it-ops` role |
 | Traefik dashboard | http://localhost:8088 | lab only |
 | Identity admin (Keycloak) | http://localhost:8081 | CIAM admin console — mgmt-only; `/auth/admin` is blocked at the public edge |
 | FreeIPA Web UI (Tier 0) | https://localhost:8443 | control-plane DC admin — mgmt-only, reach via the PAW |
@@ -86,11 +87,13 @@ RPCs. Customer PII is never browsable — `customer-svc` exposes only the
 > are possible by design — realistic targets for the capstone.
 
 Test logins (lab only): `ada` / `Password123!` (customer),
-`nwgadgets` / `Seller123!` (seller) — both native Keycloak (CIAM) users. The
-**employee/global-admin identities live in FreeIPA (Tier 0)**: `gadmin` /
-`$IPA_ADMIN_PASSWORD` and `finance.clerk` / `Staff123!`. LDAP federation into
-Keycloak is configured but employee login is still pending the attribute-mapper fix
-tracked in the Tier 0 implementation record.
+`nwgadgets` / `Seller123!` (seller), and `it.ops` / `$IPA_IT_PASSWORD` (IT Operations
+dashboard). Customer and seller users are native Keycloak identities. The
+**employee/global-admin/IT identities live in FreeIPA (Tier 0)**: `gadmin` /
+`$IPA_ADMIN_PASSWORD`, `finance.clerk` / `Staff123!`, and `it.ops`. Workforce
+LDAP federation, attribute mapping, and group-to-role mapping are configured;
+`it.ops` receives `employee` + `it-ops`, while `gadmin` and `finance.clerk` are
+denied the IT dashboard because neither belongs to the FreeIPA `it-ops` group.
 Or register a fresh customer from the storefront.
 
 ## Internal identity and privileged access

@@ -1,10 +1,6 @@
-# Local development workarounds:
-# - The repository references ./oe-dashboard, but that build context is absent
-#   from the current main branch.
+# Local development workaround:
 # - Expose only the storefront/API edge on public port 5002 for verification.
 services:
   edge:
     ports: !override
       - "0.0.0.0:5002:80"
-  oe-dashboard:
-    profiles: ["oe-disabled"]

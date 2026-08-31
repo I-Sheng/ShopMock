@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>ShopMock — IT Operations</title>
+<link rel="stylesheet" href="app.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='4' fill='%238b6ff0'/><rect x='4' y='4' width='8' height='8' rx='2' fill='%23c3f53c'/></svg>">
+</head>
+<body
+  data-realm="{{ realm }}"
+  data-client-id="{{ client_id }}"
+  data-required-role="{{ required_role }}"
+  data-project="{{ project }}">
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark" aria-hidden="true"></span>
+    <span class="brand-text">
+      <strong>ShopMock</strong>
+      <span class="brand-sub">IT Operations</span>
+    </span>
+  </div>
+  <div class="topbar-actions">
+    <span id="identity" class="identity" hidden></span>
+    <button id="refresh" class="btn btn-ghost" type="button" hidden>Refresh now</button>
+    <label id="auto-wrap" class="auto" hidden>
+      <input id="auto" type="checkbox" checked>
+      <span>Auto&nbsp;refresh</span>
+    </label>
+    <button id="signout" class="btn btn-ghost" type="button" hidden>Sign out</button>
+  </div>
+</header>
+
+<main id="main">
+
+  <section id="panel-loading" class="panel" aria-busy="true">
+    <p class="panel-lead">Checking your session…</p>
+  </section>
+
+  <section id="panel-signedout" class="panel" hidden>
+    <h1>Internal operations console</h1>
+    <p class="panel-lead">
+      Live health of the ShopMock container project. Access is restricted to the
+      <code>{{ required_role }}</code> role — sign in with your workforce account.
+    </p>
+    <button id="signin" class="btn btn-primary" type="button">Sign in with ShopMock ID</button>
+    <p class="panel-note">
+      Storefront and Seller Central sessions do not apply here: this console uses
+      its own <code>{{ client_id }}</code> client.
+    </p>
+  </section>
+
+  <section id="panel-denied" class="panel panel-denied" hidden>
+    <h1>Not authorized</h1>
+    <p class="panel-lead">
+      Your account signed in successfully but is not a member of
+      <code>{{ required_role }}</code>. Container status is not available to you.
+    </p>
+    <p class="panel-note">
+      Membership is granted through the FreeIPA <code>it-ops</code> group.
+      Employee or global-administrator rights alone are not sufficient.
+    </p>
+    <button id="signout-denied" class="btn btn-ghost" type="button">Sign out</button>
+  </section>
+
+  <section id="panel-error" class="panel panel-error" hidden>
+    <h1>Status unavailable</h1>
+    <p id="error-detail" class="panel-lead"></p>
+    <button id="retry" class="btn btn-primary" type="button">Try again</button>
+  </section>
+
+  <section id="panel-status" hidden>
+    <div class="status-head">
+      <h1>
+        Project <code>{{ project }}</code>
+        <span id="verdict" class="verdict">—</span>
+      </h1>
+      <p id="updated" class="updated">&nbsp;</p>
+    </div>
+
+    <h2 class="sr-only">Summary</h2>
+    <ul id="tiles" class="tiles"></ul>
+
+    <h2 class="sr-only">Containers</h2>
+    <div class="table-wrap">
+      <table id="containers">
+        <caption class="sr-only">
+          Every container in the {{ project }} compose project, with state,
+          health, image and age.
+        </caption>
+        <thead>
+          <tr>
+            <th scope="col">Service</th>
+            <th scope="col">Container</th>
+            <th scope="col">State</th>
+            <th scope="col">Health</th>
+            <th scope="col">Image</th>
+            <th scope="col">Age</th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <p id="live" class="sr-only" role="status" aria-live="polite"></p>
+</main>
+
+<footer class="foot">
+  Read-only container status. Environment variables, commands, mounts and
+  secrets are never read or exposed by this console.
+</footer>
+
+<script src="pkce.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
