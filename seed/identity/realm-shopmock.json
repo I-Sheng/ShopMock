@@ -25,6 +25,14 @@
       {
         "name": "it-ops",
         "description": "Internal IT operations — container health console (/oe)"
+      },
+      {
+        "name": "finance",
+        "description": "Finance — revenue and settlement portal (/finance)"
+      },
+      {
+        "name": "hr",
+        "description": "People operations — staff directory portal (/hr)"
       }
     ]
   },
@@ -66,6 +74,18 @@
           "name": "it-ops",
           "realmRoles": [
             "it-ops"
+          ]
+        },
+        {
+          "name": "finance",
+          "realmRoles": [
+            "finance"
+          ]
+        },
+        {
+          "name": "hr",
+          "realmRoles": [
+            "hr"
           ]
         },
         {
@@ -167,6 +187,46 @@
       "secret": "lab-internal-client-secret",
       "serviceAccountsEnabled": true,
       "standardFlowEnabled": false
+    },
+    {
+      "clientId": "finance-portal",
+      "description": "Finance portal (/finance) — authorization code + PKCE",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": [
+        "http://localhost/finance/",
+        "http://localhost/finance/*"
+      ],
+      "webOrigins": [
+        "http://localhost",
+        "+"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      }
+    },
+    {
+      "clientId": "hr-portal",
+      "description": "People operations portal (/hr) — authorization code + PKCE",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": [
+        "http://localhost/hr/",
+        "http://localhost/hr/*"
+      ],
+      "webOrigins": [
+        "http://localhost",
+        "+"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      }
     }
   ],
   "users": [
@@ -274,11 +334,21 @@
               "providerId": "user-attribute-ldap-mapper",
               "subComponents": {},
               "config": {
-                "ldap.attribute": ["uid"],
-                "user.model.attribute": ["username"],
-                "read.only": ["true"],
-                "always.read.value.from.ldap": ["true"],
-                "is.mandatory.in.ldap": ["true"]
+                "ldap.attribute": [
+                  "uid"
+                ],
+                "user.model.attribute": [
+                  "username"
+                ],
+                "read.only": [
+                  "true"
+                ],
+                "always.read.value.from.ldap": [
+                  "true"
+                ],
+                "is.mandatory.in.ldap": [
+                  "true"
+                ]
               }
             },
             {
@@ -286,11 +356,21 @@
               "providerId": "user-attribute-ldap-mapper",
               "subComponents": {},
               "config": {
-                "ldap.attribute": ["givenName"],
-                "user.model.attribute": ["firstName"],
-                "read.only": ["true"],
-                "always.read.value.from.ldap": ["true"],
-                "is.mandatory.in.ldap": ["false"]
+                "ldap.attribute": [
+                  "givenName"
+                ],
+                "user.model.attribute": [
+                  "firstName"
+                ],
+                "read.only": [
+                  "true"
+                ],
+                "always.read.value.from.ldap": [
+                  "true"
+                ],
+                "is.mandatory.in.ldap": [
+                  "false"
+                ]
               }
             },
             {
@@ -298,11 +378,21 @@
               "providerId": "user-attribute-ldap-mapper",
               "subComponents": {},
               "config": {
-                "ldap.attribute": ["sn"],
-                "user.model.attribute": ["lastName"],
-                "read.only": ["true"],
-                "always.read.value.from.ldap": ["true"],
-                "is.mandatory.in.ldap": ["false"]
+                "ldap.attribute": [
+                  "sn"
+                ],
+                "user.model.attribute": [
+                  "lastName"
+                ],
+                "read.only": [
+                  "true"
+                ],
+                "always.read.value.from.ldap": [
+                  "true"
+                ],
+                "is.mandatory.in.ldap": [
+                  "false"
+                ]
               }
             },
             {
@@ -310,11 +400,21 @@
               "providerId": "user-attribute-ldap-mapper",
               "subComponents": {},
               "config": {
-                "ldap.attribute": ["mail"],
-                "user.model.attribute": ["email"],
-                "read.only": ["true"],
-                "always.read.value.from.ldap": ["true"],
-                "is.mandatory.in.ldap": ["false"]
+                "ldap.attribute": [
+                  "mail"
+                ],
+                "user.model.attribute": [
+                  "email"
+                ],
+                "read.only": [
+                  "true"
+                ],
+                "always.read.value.from.ldap": [
+                  "true"
+                ],
+                "is.mandatory.in.ldap": [
+                  "false"
+                ]
               }
             },
             {
@@ -322,40 +422,98 @@
               "providerId": "group-ldap-mapper",
               "subComponents": {},
               "config": {
-                "groups.dn": ["cn=groups,cn=accounts,dc=shopmock,dc=lab"],
-                "group.name.ldap.attribute": ["cn"],
-                "group.object.classes": ["groupOfNames"],
-                "preserve.group.inheritance": ["false"],
-                "ignore.missing.groups": ["true"],
-                "membership.ldap.attribute": ["member"],
-                "membership.attribute.type": ["DN"],
-                "membership.user.ldap.attribute": ["uid"],
-                "groups.ldap.filter": ["(|(cn=employees)(cn=tier0-admins)(cn=server-admins)(cn=helpdesk)(cn=it-ops))"],
-                "mode": ["READ_ONLY"],
-                "user.roles.retrieve.strategy": ["GET_GROUPS_FROM_USER_MEMBEROF_ATTRIBUTE"],
-                "memberof.ldap.attribute": ["memberOf"],
-                "drop.non.existing.groups.during.sync": ["false"]
+                "groups.dn": [
+                  "cn=groups,cn=accounts,dc=shopmock,dc=lab"
+                ],
+                "group.name.ldap.attribute": [
+                  "cn"
+                ],
+                "group.object.classes": [
+                  "groupOfNames"
+                ],
+                "preserve.group.inheritance": [
+                  "false"
+                ],
+                "ignore.missing.groups": [
+                  "true"
+                ],
+                "membership.ldap.attribute": [
+                  "member"
+                ],
+                "membership.attribute.type": [
+                  "DN"
+                ],
+                "membership.user.ldap.attribute": [
+                  "uid"
+                ],
+                "groups.ldap.filter": [
+                  "(|(cn=employees)(cn=tier0-admins)(cn=server-admins)(cn=helpdesk)(cn=it-ops)(cn=finance)(cn=hr))"
+                ],
+                "mode": [
+                  "READ_ONLY"
+                ],
+                "user.roles.retrieve.strategy": [
+                  "GET_GROUPS_FROM_USER_MEMBEROF_ATTRIBUTE"
+                ],
+                "memberof.ldap.attribute": [
+                  "memberOf"
+                ],
+                "drop.non.existing.groups.during.sync": [
+                  "false"
+                ]
               }
             }
           ]
         },
         "config": {
-          "enabled": ["true"],
-          "priority": ["1"],
-          "editMode": ["READ_ONLY"],
-          "importEnabled": ["true"],
-          "syncRegistrations": ["false"],
-          "vendor": ["rhds"],
-          "usernameLDAPAttribute": ["uid"],
-          "rdnLDAPAttribute": ["uid"],
-          "uuidLDAPAttribute": ["ipaUniqueID"],
-          "userObjectClasses": ["inetOrgPerson, organizationalPerson"],
-          "connectionUrl": ["ldap://ipa.shopmock.lab:389"],
-          "usersDn": ["cn=users,cn=accounts,dc=shopmock,dc=lab"],
-          "bindDn": ["uid=keycloak-federation,cn=sysaccounts,cn=etc,dc=shopmock,dc=lab"],
-          "searchScope": ["1"],
-          "pagination": ["true"],
-          "connectionPooling": ["true"]
+          "enabled": [
+            "true"
+          ],
+          "priority": [
+            "1"
+          ],
+          "editMode": [
+            "READ_ONLY"
+          ],
+          "importEnabled": [
+            "true"
+          ],
+          "syncRegistrations": [
+            "false"
+          ],
+          "vendor": [
+            "rhds"
+          ],
+          "usernameLDAPAttribute": [
+            "uid"
+          ],
+          "rdnLDAPAttribute": [
+            "uid"
+          ],
+          "uuidLDAPAttribute": [
+            "ipaUniqueID"
+          ],
+          "userObjectClasses": [
+            "inetOrgPerson, organizationalPerson"
+          ],
+          "connectionUrl": [
+            "ldap://ipa.shopmock.lab:389"
+          ],
+          "usersDn": [
+            "cn=users,cn=accounts,dc=shopmock,dc=lab"
+          ],
+          "bindDn": [
+            "uid=keycloak-federation,cn=sysaccounts,cn=etc,dc=shopmock,dc=lab"
+          ],
+          "searchScope": [
+            "1"
+          ],
+          "pagination": [
+            "true"
+          ],
+          "connectionPooling": [
+            "true"
+          ]
         }
       }
     ],

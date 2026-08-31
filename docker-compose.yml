@@ -268,6 +268,66 @@ services:
       traefik.http.middlewares.oe-strip.stripprefix.prefixes: "/oe"
       traefik.http.services.oe.loadbalancer.server.port: "8000"
 
+  finance-portal:                   # Finance workforce app — /finance (role: finance)
+    build: ./finance-portal
+    restart: unless-stopped
+    environment:
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY}
+      PGRST_JWT_SECRET: ${PGRST_JWT_SECRET}    # same pinned realm JWK as PostgREST
+      FINANCE_PORTAL_DB_PASSWORD: ${FINANCE_PORTAL_DB_PASSWORD}
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-http://localhost}
+      # Optional overrides; the defaults below match the realm seed. Setting
+      # FINANCE_ALLOWED_ISSUERS replaces the PUBLIC_ORIGIN-derived issuer list.
+      FINANCE_ALLOWED_ISSUERS: ${FINANCE_ALLOWED_ISSUERS:-}
+      FINANCE_OIDC_REALM: ${FINANCE_OIDC_REALM:-shopmock}
+      FINANCE_OIDC_CLIENT_ID: ${FINANCE_OIDC_CLIENT_ID:-finance-portal}
+      FINANCE_REQUIRED_ROLE: ${FINANCE_REQUIRED_ROLE:-finance}
+    # data_net reaches finance-db and nothing this service has a credential for.
+    # It is deliberately NOT on hr_net: the HR database is unreachable from here
+    # at the network layer as well as the credential layer.
+    networks: [tier2_net, data_net]
+    depends_on: [finance-db]
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: shopmock_tier2_net
+      traefik.http.routers.finance.rule: "PathPrefix(`/finance`)"
+      traefik.http.routers.finance.middlewares: "finance-slash,finance-strip"
+      # /finance -> /finance/ first, so relative asset URLs resolve under /finance/.
+      traefik.http.middlewares.finance-slash.redirectregex.regex: "^(https?://[^/]+)/finance$$"
+      traefik.http.middlewares.finance-slash.redirectregex.replacement: "$${1}/finance/"
+      traefik.http.middlewares.finance-strip.stripprefix.prefixes: "/finance"
+      traefik.http.services.finance.loadbalancer.server.port: "8000"
+
+  hr-portal:                        # HR workforce app — /hr (role: hr)
+    build: ./hr-portal
+    restart: unless-stopped
+    environment:
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY}
+      PGRST_JWT_SECRET: ${PGRST_JWT_SECRET}    # same pinned realm JWK as PostgREST
+      HR_PORTAL_DB_PASSWORD: ${HR_PORTAL_DB_PASSWORD}
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-http://localhost}
+      # Optional overrides; the defaults below match the realm seed. Setting
+      # HR_ALLOWED_ISSUERS replaces the PUBLIC_ORIGIN-derived issuer list.
+      HR_ALLOWED_ISSUERS: ${HR_ALLOWED_ISSUERS:-}
+      HR_OIDC_REALM: ${HR_OIDC_REALM:-shopmock}
+      HR_OIDC_CLIENT_ID: ${HR_OIDC_CLIENT_ID:-hr-portal}
+      HR_REQUIRED_ROLE: ${HR_REQUIRED_ROLE:-hr}
+    # hr_net only — this service has no route to data_net, so finance-db,
+    # customer-db, orders-db and catalog-db are unreachable from it even with
+    # full control of the container.
+    networks: [tier2_net, hr_net]
+    depends_on: [hr-db]
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: shopmock_tier2_net
+      traefik.http.routers.hr.rule: "PathPrefix(`/hr`)"
+      traefik.http.routers.hr.middlewares: "hr-slash,hr-strip"
+      # /hr -> /hr/ first, so relative asset URLs resolve under /hr/.
+      traefik.http.middlewares.hr-slash.redirectregex.regex: "^(https?://[^/]+)/hr$$"
+      traefik.http.middlewares.hr-slash.redirectregex.replacement: "$${1}/hr/"
+      traefik.http.middlewares.hr-strip.stripprefix.prefixes: "/hr"
+      traefik.http.services.hr.loadbalancer.server.port: "8000"
+
   # The only container that mounts the runtime socket. HAProxy in front of the
   # Docker-compatible API with a request allowlist: CONTAINERS=1 permits the
   # read-only /containers endpoints and POST=0 rejects every mutating verb, so
@@ -336,9 +396,26 @@ services:
       POSTGRES_PASSWORD: ${PG_SUPERUSER_PASSWORD}
       POSTGRES_DB: finance
       INTERNAL_BACKEND_DB_PASSWORD: ${INTERNAL_BACKEND_DB_PASSWORD}  # for 05 init script
+      FINANCE_PORTAL_DB_PASSWORD: ${FINANCE_PORTAL_DB_PASSWORD}      # for 06 init script
     volumes:
       - ./seed/finance-db:/docker-entrypoint-initdb.d:ro,z
       - finance-data:/var/lib/postgresql/data
+
+  # HR people data. The only ShopMock database with no PostgREST in front of it
+  # and no place on data_net: hr-portal is the single client, over hr_net.
+  hr-db:
+    <<: *pg-common
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${PG_SUPERUSER_PASSWORD}
+      POSTGRES_DB: hr
+      HR_PORTAL_DB_PASSWORD: ${HR_PORTAL_DB_PASSWORD}                # for 03 init script
+    # An explicit key wins over the `<<: *pg-common` merge, so this database is
+    # on hr_net *instead of* data_net, not in addition to it.
+    networks: [hr_net]
+    volumes:
+      - ./seed/hr-db:/docker-entrypoint-initdb.d:ro,z
+      - hr-data:/var/lib/postgresql/data
 
   # ---------------- SOC / Security Operations ----------------
   vault:
@@ -487,10 +564,12 @@ networks:
   soc_net:    { internal: true }
   mgmt_net:   { internal: true }
   ops_net:    { internal: true }   # oe-dashboard <-> its read-only socket proxy, nothing else
+  hr_net:     { internal: true }   # hr-portal <-> hr-db, nothing else
 
 volumes:
   customer-data: {}
   catalog-data: {}
   orders-data: {}
   finance-data: {}
+  hr-data: {}
   ipa-data: {}

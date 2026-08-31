@@ -15,6 +15,7 @@ rationale, service-to-image map, and seed-data plan, see
 | [`PLAN_AUTH_CHECKOUT.md`](PLAN_AUTH_CHECKOUT.md) | Implemented customer authentication and checkout record |
 | [`PLAN_TIER0_FREEIPA.md`](PLAN_TIER0_FREEIPA.md) | Tier 0/PAW implementation and verified workforce federation |
 | [`PLAN_OE_DASHBOARD.md`](PLAN_OE_DASHBOARD.md) | IT-only live container-health dashboard and authorization design |
+| [`scripts/verify-workforce-portals.sh`](scripts/verify-workforce-portals.sh) | Offline Finance/HR isolation, identity, and topology verification |
 
 ## Quick start
 
@@ -52,6 +53,8 @@ This destroys lab data and recreates all seed state; do not use it for routine u
 | Seller Backend API (Tier 2) | http://localhost/api/seller-backend/listings | Django; seller token required (see below) |
 | Internal Ops API (Tier 2) | http://localhost/api/ops/feature_flags | PostgREST |
 | IT Operations dashboard | http://localhost/oe/ | IT-only live container health; Keycloak `it-operations` client + FreeIPA `it-ops` role |
+| Finance portal | http://localhost/finance/ | Read-only ledger reporting; dedicated `finance-portal` PKCE client + `finance` realm role |
+| People Operations portal | http://localhost/hr/ | Read-only isolated staff reporting; dedicated `hr-portal` PKCE client + `hr` realm role |
 | Traefik dashboard | http://localhost:8088 | lab only |
 | Identity admin (Keycloak) | http://localhost:8081 | CIAM admin console — mgmt-only; `/auth/admin` is blocked at the public edge |
 | FreeIPA Web UI (Tier 0) | https://localhost:8443 | control-plane DC admin — mgmt-only, reach via the PAW |
@@ -86,15 +89,39 @@ RPCs. Customer PII is never browsable — `customer-svc` exposes only the
 > `customer_ref` and per-line prices to `place_order`, so IDOR and price tampering
 > are possible by design — realistic targets for the capstone.
 
-Test logins (lab only): `ada` / `Password123!` (customer),
-`nwgadgets` / `Seller123!` (seller), and `it.ops` / `$IPA_IT_PASSWORD` (IT Operations
-dashboard). Customer and seller users are native Keycloak identities. The
-**employee/global-admin/IT identities live in FreeIPA (Tier 0)**: `gadmin` /
-`$IPA_ADMIN_PASSWORD`, `finance.clerk` / `Staff123!`, and `it.ops`. Workforce
-LDAP federation, attribute mapping, and group-to-role mapping are configured;
-`it.ops` receives `employee` + `it-ops`, while `gadmin` and `finance.clerk` are
-denied the IT dashboard because neither belongs to the FreeIPA `it-ops` group.
-Or register a fresh customer from the storefront.
+Test logins (lab only): `ada` / `Password123!` (customer) and
+`nwgadgets` / `Seller123!` (seller). Customer and seller users are native
+Keycloak identities. Workforce identities live in FreeIPA and authenticate
+through dedicated Keycloak clients:
+
+| Portal | Public URL | FreeIPA username | Password variable | Required realm role |
+| --- | --- | --- | --- | --- |
+| IT Operations | http://107.173.152.100:5002/oe/ | `it.ops` | `IPA_IT_PASSWORD` | `it-ops` |
+| Finance | http://107.173.152.100:5002/finance/ | `finance.clerk` | `IPA_FINANCE_PASSWORD` | `finance` |
+| People Operations | http://107.173.152.100:5002/hr/ | `hr.specialist` | `IPA_HR_PASSWORD` | `hr` |
+
+`gadmin` uses `$IPA_ADMIN_PASSWORD`. Workforce LDAP federation, attribute
+mapping, and group-to-role mapping are configured so each job-function identity
+receives only its corresponding application role. Changing a password variable
+does not rotate an existing FreeIPA user; use `ipa passwd <login>` for an
+already-created identity. Or register a fresh customer from the storefront.
+
+## Finance and People Operations portals
+
+Both workforce portals use authorization code flow with PKCE S256. Their public
+Keycloak clients have direct grants and service accounts disabled. The Django
+services verify the pinned RS256 realm key, an exact trusted issuer, the exact
+client `azp`, `typ=Bearer`, and the required realm role before making a database
+query. A same-named client role is not accepted.
+
+Finance connects only to `finance-db` as `finance_portal`. Its column grants omit
+payment tokens and customer references, and responses are built from explicit
+field allowlists. HR has a separate `hr-db`, private `hr_net`, `hr_portal` login,
+image, templates, and assets; it has no route or credential to a commerce or
+finance database. Both database roles default every transaction to read-only.
+
+Run the offline wiring checks with `bash scripts/verify-workforce-portals.sh`.
+Run each Django suite via its Docker `test` target; no running stack is needed.
 
 ## Internal identity and privileged access
 
@@ -185,7 +212,8 @@ Everything else is either admin (reach via the PAW) or strictly internal.
 | `*-svc` :3000 | 5× PostgREST APIs | tier1_net / tier2_net (via traefik) | Catalog/Order/Checkout/Seller/Ops APIs |
 | search :9200 | OpenSearch | edge_net | Search index API |
 | identity :8080 | Keycloak | tier1_net | OIDC/SSO token issuance to services |
-| `*-db` :5432 | 4× PostgreSQL | **data_net only** | Datastores — no route from the edge |
+| commerce `*-db` :5432 | 4× PostgreSQL | **data_net only** | Datastores — no route from the edge |
+| hr-db :5432 | PostgreSQL | **hr_net only** | Staff records — reachable only by hr-portal |
 | vault :8200 | Vault | soc_net | Secret reads by services |
 
 The databases bind to `data_net` (an `internal: true` network) and publish **no**
@@ -193,7 +221,7 @@ host port, so there is no path to them from the public side — see below.
 
 ## How segmentation is enforced
 
-Networks `tier0_net`, `tier1_net`, `tier2_net`, `data_net`, `soc_net`, `mgmt_net` are
+Networks `tier0_net`, `tier1_net`, `tier2_net`, `data_net`, `hr_net`, `soc_net`, `mgmt_net` are
 `internal: true` (no internet, not bridged to the edge). A database attaches to
 `data_net` only; its owning service bridges `data_net` ↔ its tier network. The
 storefront/edge never touches `data_net`, so the DBs cannot be reached directly
@@ -210,6 +238,7 @@ SSH to the control-plane hosts.
 | `seed/catalog-db/0*.sql` | Catalog DB (products, sellers, ops flags) |
 | `seed/orders-db/0*.sql` | Orders DB |
 | `seed/finance-db/0*.sql` | Financial/Wallet DB (PCI-scope, tokenized cards) |
+| `seed/hr-db/0*.sql` | Isolated synthetic People Operations DB |
 | `seed/identity/realm-shopmock.json` | Keycloak (identity store) |
 | `seed/vault/seed-secrets.sh` | Vault KV (`secret/shopmock/*`) |
 | `seed/search/index-catalog.sh` | OpenSearch index `catalog` |

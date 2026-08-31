@@ -12,6 +12,8 @@ set -eu
 : "${IPA_DM_PASSWORD:?set IPA_DM_PASSWORD}"
 : "${IPA_LDAP_BIND_PASSWORD:?set IPA_LDAP_BIND_PASSWORD}"
 : "${IPA_IT_PASSWORD:?set IPA_IT_PASSWORD}"
+: "${IPA_FINANCE_PASSWORD:?set IPA_FINANCE_PASSWORD}"
+: "${IPA_HR_PASSWORD:?set IPA_HR_PASSWORD}"
 : "${IPA_DOMAIN:?set IPA_DOMAIN}"
 echo "$IPA_ADMIN_PASSWORD" | kinit admin >/dev/null
 
@@ -72,18 +74,32 @@ ensure_group employees     "ShopMock staff — federated into Keycloak"
 # administrator has no business reading infrastructure status by default, and an IT
 # operator has no business in Tier 0. Federated as the Keycloak realm role 'it-ops'.
 ensure_group it-ops        "IT operations — container health console (/oe)"
+# Finance and HR are job functions on the same footing as it-ops: each grants
+# exactly one workforce application and nothing else. They are peers, not a
+# hierarchy — Finance cannot read staff records and HR cannot read the ledger,
+# and neither is implied by tier0-admins. Federated as the Keycloak realm roles
+# 'finance' and 'hr'.
+ensure_group finance       "Finance — revenue and settlement portal (/finance)"
+ensure_group hr            "People operations — staff directory portal (/hr)"
 
 # ---- Workforce identities (moved out of the Keycloak realm JSON; they live here now) --------
-ensure_user gadmin        "Global"  "Admin" "$IPA_ADMIN_PASSWORD"
-ensure_user finance.clerk "Finance" "Clerk" "Staff123!"
-ensure_user it.ops        "IT"      "Operations" "$IPA_IT_PASSWORD"
+# Every lab password comes from the environment (.env); none is committed here.
+# ensure_user is create-if-missing, so rotating one of these variables does not
+# reset an identity that already exists in the directory — see README.
+ensure_user gadmin         "Global"  "Admin"      "$IPA_ADMIN_PASSWORD"
+ensure_user finance.clerk  "Finance" "Clerk"      "$IPA_FINANCE_PASSWORD"
+ensure_user it.ops         "IT"      "Operations" "$IPA_IT_PASSWORD"
+ensure_user hr.specialist  "People"  "Specialist" "$IPA_HR_PASSWORD"
 
 ipa group-add-member tier0-admins --users=gadmin        >/dev/null 2>&1 || true
 ipa group-add-member helpdesk     --users=finance.clerk >/dev/null 2>&1 || true
 ipa group-add-member it-ops       --users=it.ops        >/dev/null 2>&1 || true
+ipa group-add-member finance      --users=finance.clerk >/dev/null 2>&1 || true
+ipa group-add-member hr           --users=hr.specialist >/dev/null 2>&1 || true
 # Repeat --users: a comma-delimited value is treated as one invalid login by
 # this IPA CLI and previously left the employees group empty.
-ipa group-add-member employees --users=gadmin --users=finance.clerk --users=it.ops >/dev/null 2>&1 || true
+ipa group-add-member employees --users=gadmin --users=finance.clerk --users=it.ops \
+  --users=hr.specialist >/dev/null 2>&1 || true
 
 # Fail the bootstrap if the least-privilege identity cannot read the exact
 # attributes Keycloak needs after workforce users have been created.
@@ -112,4 +128,4 @@ ipa sudorule-add-user tier0-sudo --groups=tier0-admins >/dev/null 2>&1 || true
 ipa sudorule-add-host tier0-sudo --hosts=paw.shopmock.lab >/dev/null 2>&1 || true
 ipa sudorule-mod tier0-sudo --cmdcat=all >/dev/null 2>&1 || true
 
-echo "ipa-bootstrap: tier groups, employees, it-ops, and HBAC (deny-by-default + tier0-access) applied"
+echo "ipa-bootstrap: tier groups, employees, it-ops, finance, hr, and HBAC (deny-by-default + tier0-access) applied"

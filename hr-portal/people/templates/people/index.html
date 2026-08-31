@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="people">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>ShopMock — People Operations</title>
+<link rel="stylesheet" href="app.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='8' fill='%233c3ca6'/><circle cx='8' cy='6' r='2.4' fill='%23ffffff'/><path d='M3.4 13a4.6 4.6 0 0 1 9.2 0z' fill='%23ffffff'/></svg>">
+</head>
+<body
+  data-realm="{{ realm }}"
+  data-client-id="{{ client_id }}"
+  data-required-role="{{ required_role }}">
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark" aria-hidden="true"></span>
+    <span class="brand-text">
+      <strong>ShopMock</strong>
+      <span class="brand-sub">People Operations</span>
+    </span>
+  </div>
+  <div class="topbar-actions">
+    <span id="identity" class="identity" hidden></span>
+    <button id="refresh" class="btn btn-ghost" type="button" hidden>Refresh</button>
+    <button id="signout" class="btn btn-ghost" type="button" hidden>Sign out</button>
+  </div>
+</header>
+
+<main id="main">
+
+  <section id="panel-loading" class="panel" aria-busy="true">
+    <p class="panel-lead">Checking your session…</p>
+  </section>
+
+  <section id="panel-signedout" class="panel" hidden>
+    <h1>People directory</h1>
+    <p class="panel-lead">
+      Team structure, staff records and time away for ShopMock colleagues.
+      Access is restricted to the <code>{{ required_role }}</code> role — sign in
+      with your workforce account.
+    </p>
+    <button id="signin" class="btn btn-primary" type="button">Sign in with ShopMock ID</button>
+    <p class="panel-note">
+      Storefront and Seller Central sessions do not apply here: this application
+      uses its own <code>{{ client_id }}</code> client.
+    </p>
+  </section>
+
+  <section id="panel-denied" class="panel panel-denied" hidden>
+    <h1>Not authorized</h1>
+    <p class="panel-lead">
+      Your account signed in successfully but is not a member of
+      <code>{{ required_role }}</code>. Staff records are not available to you.
+    </p>
+    <p class="panel-note">
+      Membership is granted through the FreeIPA <code>hr</code> group. Employee
+      or global-administrator rights alone are not sufficient, and this decision
+      is made on the server, not in this page.
+    </p>
+    <button id="signout-denied" class="btn btn-ghost" type="button">Sign out</button>
+  </section>
+
+  <section id="panel-error" class="panel panel-error" hidden>
+    <h1>Directory unavailable</h1>
+    <p id="error-detail" class="panel-lead"></p>
+    <button id="retry" class="btn btn-primary" type="button">Try again</button>
+  </section>
+
+  <section id="panel-people" hidden>
+    <div class="section-head">
+      <h1>People</h1>
+      <p id="updated" class="updated">&nbsp;</p>
+    </div>
+
+    <h2 class="sr-only">Headcount summary</h2>
+    <ul id="tiles" class="tiles"></ul>
+
+    <h2 class="section-title">Teams</h2>
+    <div class="table-wrap">
+      <table>
+        <caption class="sr-only">
+          Each team with its cost centre, filled headcount against budget, and
+          total monthly payroll.
+        </caption>
+        <thead>
+          <tr>
+            <th scope="col">Department</th>
+            <th scope="col">Cost centre</th>
+            <th scope="col" class="num">Headcount</th>
+            <th scope="col" class="num">Payroll</th>
+          </tr>
+        </thead>
+        <tbody id="department-rows"></tbody>
+      </table>
+    </div>
+
+    <h2 class="section-title">Directory</h2>
+    <div class="table-wrap">
+      <table>
+        <caption class="sr-only">
+          Staff records: reference, name, role, team, contract type, status and
+          start date.
+        </caption>
+        <thead>
+          <tr>
+            <th scope="col">Reference</th>
+            <th scope="col">Name</th>
+            <th scope="col">Role</th>
+            <th scope="col">Team</th>
+            <th scope="col">Contract</th>
+            <th scope="col">Status</th>
+            <th scope="col">Joined</th>
+          </tr>
+        </thead>
+        <tbody id="roster-rows"></tbody>
+      </table>
+    </div>
+
+    <h2 class="section-title">Time away</h2>
+    <div class="table-wrap">
+      <table>
+        <caption class="sr-only">Leave requests with their dates and approval state.</caption>
+        <thead>
+          <tr>
+            <th scope="col">Person</th>
+            <th scope="col">Type</th>
+            <th scope="col">From</th>
+            <th scope="col">To</th>
+            <th scope="col" class="num">Days</th>
+            <th scope="col">Status</th>
+          </tr>
+        </thead>
+        <tbody id="leave-rows"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <p id="live" class="sr-only" role="status" aria-live="polite"></p>
+</main>
+
+<footer class="foot">
+  Read-only people reporting. Individual pay, government identifiers, home
+  addresses and bank details are not stored by this application and are never
+  served by it; payroll appears only as a team total.
+</footer>
+
+<script src="pkce.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

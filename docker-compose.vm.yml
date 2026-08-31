@@ -97,6 +97,20 @@ services:
     labels:
       traefik.docker.network: sandboxnet
 
+  finance-portal:
+    networks: !override [sandboxnet]
+    labels:
+      traefik.docker.network: sandboxnet
+
+  # Like the socket proxy above, hr-db keeps its private network here: the
+  # portal joins sandboxnet so Traefik can route to it, but hr_net remains the
+  # only path to the HR database, so the flat-network policy on this host does
+  # not put staff records within reach of every other service.
+  hr-portal:
+    networks: !override [sandboxnet, hr_net]
+    labels:
+      traefik.docker.network: sandboxnet
+
   # The socket reader, not the web tier, is the service that needs the podman
   # socket and therefore the SELinux exemption. On the flat sandboxnet the proxy
   # loses its network isolation like everything else here — its own request
@@ -121,6 +135,10 @@ services:
 
   finance-db:
     networks: !override [sandboxnet]
+
+  # Deliberately NOT moved to sandboxnet — see hr-portal above.
+  hr-db:
+    networks: !override [hr_net]
 
   vault:
     ports: !override ["127.0.0.1:8200:8200"]

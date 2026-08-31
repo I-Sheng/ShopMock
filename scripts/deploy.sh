@@ -80,12 +80,23 @@ fi
 # (services then disagree with the DB role password), so generate a lab value
 # instead. The role scripts below ALTER the password on every deploy, so the
 # DB side re-syncs to whatever .env now holds.
-for var in SELLER_BACKEND_DB_PASSWORD; do
-  if ! grep -q "^${var}=" .env; then
-    echo "deploy: ${var} missing from .env — generating a lab value (add it to the canonical env file too)" >&2
-    echo "${var}=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')" >> .env
-  fi
-done
+ensure_env_var() {   # <name> [prefix]
+  local var="$1" prefix="${2:-}"
+  grep -q "^${var}=" .env && return 0
+  echo "deploy: ${var} missing from .env — generating a lab value (add it to the canonical env file too)" >&2
+  echo "${var}=${prefix}$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')" >> .env
+}
+
+ensure_env_var SELLER_BACKEND_DB_PASSWORD
+ensure_env_var FINANCE_PORTAL_DB_PASSWORD
+ensure_env_var HR_PORTAL_DB_PASSWORD
+# FreeIPA rejects passwords that are too simple, so these carry a class-mixed
+# prefix. A generated value only matters for an identity that does not exist
+# yet: seed/ipa/bootstrap.sh is create-if-missing and never resets a password.
+# Whoever needs to log in as finance.clerk or hr.specialist reads the value out
+# of .env (or sets it there deliberately before the first deploy).
+ensure_env_var IPA_FINANCE_PASSWORD 'Lab1!-'
+ensure_env_var IPA_HR_PASSWORD 'Lab1!-'
 
 # Rootless podman maps in-container service users (postgres uid 70, keycloak,
 # vault, …) to unprivileged subuids, so bind-mounted seed/ files must be world-
@@ -107,7 +118,7 @@ fi
 "${COMPOSE[@]}" up -d --build
 
 echo "deploy: waiting for databases..."
-for db in customer-db orders-db finance-db catalog-db; do
+for db in customer-db orders-db finance-db catalog-db hr-db; do
   ready=
   for _ in $(seq 1 60); do
     "${COMPOSE[@]}" exec -T "$db" pg_isready -U postgres >/dev/null 2>&1 && { ready=1; break; }
@@ -139,6 +150,19 @@ pw=$(grep '^SELLER_BACKEND_DB_PASSWORD=' .env | cut -d= -f2-)
   sh /docker-entrypoint-initdb.d/05_seller_backend_role.sh
 "${COMPOSE[@]}" exec -T -e SELLER_BACKEND_DB_PASSWORD="$pw" orders-db \
   sh /docker-entrypoint-initdb.d/06_seller_backend_role.sh
+
+# The two workforce portals. Each gets a read-only login on exactly one
+# database; the finance one is granted columns rather than tables so that the
+# payment token stays unreadable even to this service.
+echo "deploy: ensuring finance_portal role..."
+pw=$(grep '^FINANCE_PORTAL_DB_PASSWORD=' .env | cut -d= -f2-)
+"${COMPOSE[@]}" exec -T -e FINANCE_PORTAL_DB_PASSWORD="$pw" finance-db \
+  sh /docker-entrypoint-initdb.d/06_finance_portal_role.sh
+
+echo "deploy: ensuring hr_portal role..."
+pw=$(grep '^HR_PORTAL_DB_PASSWORD=' .env | cut -d= -f2-)
+"${COMPOSE[@]}" exec -T -e HR_PORTAL_DB_PASSWORD="$pw" hr-db \
+  sh /docker-entrypoint-initdb.d/03_hr_portal_role.sh
 
 echo "deploy: reloading PostgREST schema caches..."
 "${COMPOSE[@]}" exec -T customer-db psql -U postgres -d customer -c "NOTIFY pgrst, 'reload schema';"
@@ -214,49 +238,77 @@ group_child_id() {   # <parent-uuid> <child name>
     | head -1
 }
 
-# --- IT operations identity objects ------------------------------------------
-# The realm seed carries these, but Keycloak imports the seed only onto a fresh
-# realm volume. Re-assert them so an in-place deploy of an already-running stack
-# converges too — same reasoning as the DB role scripts above.
-if ! kc get roles/it-ops >/dev/null 2>&1; then
-  kc create roles -s name=it-ops \
-    -s 'description=Internal IT operations — container health console (/oe)' >/dev/null
-  echo "deploy: created Keycloak realm role 'it-ops'"
-fi
+# --- Workforce job-function identity objects ---------------------------------
+# it-ops, finance and hr are peers: each is a job function that grants exactly
+# one internal application. The realm seed carries them, but Keycloak imports
+# the seed only onto a fresh realm volume. Re-assert them so an in-place deploy
+# of an already-running stack converges too — same reasoning as the DB role
+# scripts above.
+ensure_realm_role() {   # <role> <description>
+  kc get "roles/$1" >/dev/null 2>&1 && return 0
+  kc create roles -s "name=$1" -s "description=$2" >/dev/null
+  echo "deploy: created Keycloak realm role '$1'"
+}
+
+ensure_realm_role it-ops 'Internal IT operations — container health console (/oe)'
+ensure_realm_role finance 'Finance — revenue and settlement portal (/finance)'
+ensure_realm_role hr 'People operations — staff directory portal (/hr)'
+
+# Each /workforce/<name> group must carry the like-named realm role: that
+# mapping is what turns FreeIPA group membership into an authorization decision.
+ensure_workforce_group_role() {   # <name>
+  local name="$1" gid
+  gid=$(group_child_id "$workforce_gid" "$name")
+  if [[ ! "$gid" =~ ^[0-9a-fA-F-]{36}$ ]]; then
+    kc create "groups/$workforce_gid/children" -s "name=$name" >/dev/null
+    gid=$(group_child_id "$workforce_gid" "$name")
+    echo "deploy: created Keycloak group /workforce/$name"
+  fi
+  if [[ "$gid" =~ ^[0-9a-fA-F-]{36}$ ]]; then
+    if ! kc get "groups/$gid/role-mappings/realm" \
+         | jq -e --arg n "$name" '.[] | select(.name==$n)' >/dev/null; then
+      kc add-roles --gid "$gid" --rolename "$name" >/dev/null
+    fi
+    kc get "groups/$gid/role-mappings/realm" \
+      | jq -e --arg n "$name" '.[] | select(.name==$n)' >/dev/null \
+      || { echo "deploy: ERROR: /workforce/$name lacks the $name role" >&2; exit 1; }
+  fi
+}
 
 workforce_gid=$(kc get groups -q search=workforce \
   | jq -r '.[] | select(.name=="workforce") | .id' | head -1)
-if [[ "$workforce_gid" =~ ^[0-9a-fA-F-]{36}$ ]]; then
-  itops_gid=$(group_child_id "$workforce_gid" it-ops)
-  if [[ ! "$itops_gid" =~ ^[0-9a-fA-F-]{36}$ ]]; then
-    kc create "groups/$workforce_gid/children" -s name=it-ops >/dev/null
-    itops_gid=$(group_child_id "$workforce_gid" it-ops)
-    echo "deploy: created Keycloak group /workforce/it-ops"
-  fi
-  if [[ "$itops_gid" =~ ^[0-9a-fA-F-]{36}$ ]]; then
-    if ! kc get "groups/$itops_gid/role-mappings/realm" \
-         | jq -e '.[] | select(.name=="it-ops")' >/dev/null; then
-      kc add-roles --gid "$itops_gid" --rolename it-ops >/dev/null
-    fi
-    kc get "groups/$itops_gid/role-mappings/realm" \
-      | jq -e '.[] | select(.name=="it-ops")' >/dev/null \
-      || { echo "deploy: ERROR: /workforce/it-ops lacks the it-ops role" >&2; exit 1; }
-  fi
-else
-  echo "deploy: WARN /workforce group not found — it-ops federation mapping skipped" >&2
+if [[ ! "$workforce_gid" =~ ^[0-9a-fA-F-]{36}$ ]]; then
+  kc create groups -s name=workforce >/dev/null
+  workforce_gid=$(kc get groups -q search=workforce \
+    | jq -r '.[] | select(.name=="workforce") | .id' | head -1)
+  echo "deploy: created Keycloak group /workforce"
 fi
+[[ "$workforce_gid" =~ ^[0-9a-fA-F-]{36}$ ]] \
+  || { echo "deploy: ERROR: could not converge /workforce group" >&2; exit 1; }
+ensure_workforce_group_role it-ops
+ensure_workforce_group_role finance
+ensure_workforce_group_role hr
 
-# A dedicated browser client: the console must not ride on the storefront's or
-# Seller Central's client, so a token minted there cannot reach /oe.
-if [[ ! "$(client_uuid_of it-operations)" =~ ^[0-9a-fA-F-]{36}$ ]]; then
+# Dedicated browser clients: no internal application rides on the storefront's
+# or Seller Central's client, and none rides on another's. A token minted for
+# finance-portal cannot reach /hr or /oe, and vice versa — the services check
+# `azp` server-side.
+ensure_browser_client() {   # <clientId> <description>
+  [[ "$(client_uuid_of "$1")" =~ ^[0-9a-fA-F-]{36}$ ]] && return 0
   kc create clients \
-    -s clientId=it-operations \
-    -s 'description=IT operations console (/oe) — authorization code + PKCE' \
+    -s "clientId=$1" -s "description=$2" \
     -s enabled=true -s publicClient=true -s standardFlowEnabled=true \
     -s directAccessGrantsEnabled=false -s serviceAccountsEnabled=false \
     -s 'attributes."pkce.code.challenge.method"=S256' >/dev/null
-  echo "deploy: created Keycloak client 'it-operations'"
-fi
+  echo "deploy: created Keycloak client '$1'"
+}
+
+ensure_browser_client it-operations \
+  'IT operations console (/oe) — authorization code + PKCE'
+ensure_browser_client finance-portal \
+  'Finance portal (/finance) — authorization code + PKCE'
+ensure_browser_client hr-portal \
+  'People operations portal (/hr) — authorization code + PKCE'
 
 # --- Browser client callbacks -------------------------------------------------
 # These lists are deliberate desired state, not a merge of ad-hoc console
@@ -266,6 +318,8 @@ redirect_paths() {
     storefront)       echo '/*' ;;
     seller-dashboard) echo '/seller/* /silent-check-sso.html' ;;
     it-operations)    echo '/oe/ /oe/*' ;;
+    finance-portal)   echo '/finance/ /finance/*' ;;
+    hr-portal)        echo '/hr/ /hr/*' ;;
   esac
 }
 
@@ -286,7 +340,7 @@ else
   origins="[\"http://localhost\",\"$public_origin\",\"+\"]"
 fi
 
-for client in storefront seller-dashboard it-operations; do
+for client in storefront seller-dashboard it-operations finance-portal hr-portal; do
   client_uuid=$(client_uuid_of "$client")
   if [[ ! "$client_uuid" =~ ^[0-9a-fA-F-]{36}$ ]]; then
     echo "deploy: ERROR: invalid UUID for Keycloak client '$client' (got '$client_uuid')" >&2
@@ -295,12 +349,16 @@ for client in storefront seller-dashboard it-operations; do
 
   redirects=$(redirect_json "$client")
   extra=()
-  # Re-assert PKCE each deploy: downgrading it would silently weaken the console.
-  if [ "$client" = it-operations ]; then
-    extra=(-s enabled=true -s publicClient=true -s standardFlowEnabled=true \
-      -s serviceAccountsEnabled=false -s directAccessGrantsEnabled=false \
-      -s 'attributes."pkce.code.challenge.method"=S256')
-  fi
+  # Re-assert PKCE and the disabled password grant on every internal client each
+  # deploy: downgrading either would silently weaken an application whose only
+  # gate is the token it issues.
+  case "$client" in
+    it-operations|finance-portal|hr-portal)
+      extra=(-s enabled=true -s publicClient=true -s standardFlowEnabled=true \
+        -s serviceAccountsEnabled=false -s directAccessGrantsEnabled=false \
+        -s 'attributes."pkce.code.challenge.method"=S256')
+      ;;
+  esac
 
   kc update "clients/$client_uuid" \
     -s "redirectUris=$redirects" -s "webOrigins=$origins" \
@@ -319,8 +377,10 @@ ipa_pw=$(grep '^IPA_ADMIN_PASSWORD=' .env | cut -d= -f2-)
 ipa_dm_pw=$(grep '^IPA_DM_PASSWORD=' .env | cut -d= -f2-)
 ipa_bind_pw=$(grep '^IPA_LDAP_BIND_PASSWORD=' .env | cut -d= -f2-)
 ipa_it_pw=$(grep '^IPA_IT_PASSWORD=' .env | cut -d= -f2-)
+ipa_finance_pw=$(grep '^IPA_FINANCE_PASSWORD=' .env | cut -d= -f2-)
+ipa_hr_pw=$(grep '^IPA_HR_PASSWORD=' .env | cut -d= -f2-)
 ipa_domain=$(grep '^IPA_DOMAIN=' .env | cut -d= -f2-)
-for required in ipa_pw ipa_dm_pw ipa_bind_pw ipa_it_pw ipa_domain; do
+for required in ipa_pw ipa_dm_pw ipa_bind_pw ipa_it_pw ipa_finance_pw ipa_hr_pw ipa_domain; do
   if [ -z "${!required}" ]; then
     echo "deploy: ERROR: ${required#ipa_} is missing from .env" >&2
     exit 1
@@ -344,6 +404,8 @@ else
        -e IPA_DM_PASSWORD="$ipa_dm_pw" \
        -e IPA_LDAP_BIND_PASSWORD="$ipa_bind_pw" \
        -e IPA_IT_PASSWORD="$ipa_it_pw" \
+       -e IPA_FINANCE_PASSWORD="$ipa_finance_pw" \
+       -e IPA_HR_PASSWORD="$ipa_hr_pw" \
        -e IPA_DOMAIN="$ipa_domain" \
        ipa bash /seed/bootstrap.sh; then
     ipa_bootstrap_ok=1
@@ -388,7 +450,7 @@ else
     "${COMPOSE[@]}" exec -T identity "$kcadm" update "components/$group_mapper_id" \
       --config "$kcadm_config" -r shopmock \
       -s 'config."groups.path"=["/workforce"]' \
-      -s 'config."groups.ldap.filter"=["(|(cn=employees)(cn=tier0-admins)(cn=server-admins)(cn=helpdesk)(cn=it-ops))"]' >/dev/null
+      -s 'config."groups.ldap.filter"=["(|(cn=employees)(cn=tier0-admins)(cn=server-admins)(cn=helpdesk)(cn=it-ops)(cn=finance)(cn=hr))"]' >/dev/null
     cleanup_kcadm
     trap - EXIT
     echo "deploy: Keycloak federation uses the least-privilege FreeIPA bind identity"
