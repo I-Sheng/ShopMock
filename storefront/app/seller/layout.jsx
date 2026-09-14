@@ -9,8 +9,12 @@ export const metadata = {
 export default function SellerLayout({ children }) {
   return (
     <SellerAuthProvider>
-      <SellerNav />
-      {children}
+      {/* .seller-scope re-points the shared design tokens at the plum
+          operations-console palette for everything inside Seller Central. */}
+      <div className="seller-scope">
+        <SellerNav />
+        {children}
+      </div>
     </SellerAuthProvider>
   );
 }
