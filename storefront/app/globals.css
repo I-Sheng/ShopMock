@@ -1,100 +1,100 @@
 /* ============================================================
    ShopMock design tokens
-   Customer storefront: deep indigo / blue-violet chrome, bright
-   mint-cyan accents, soft cool-lavender page surface.
-   Seller Central overrides the same tokens with a plum/violet
-   operations-console palette (see .seller-scope below).
+   Customer storefront: deep purple chrome, vivid rose-pink
+   accents, soft blush-lavender page surface.
+   Seller Central overrides the same tokens with a deeper
+   plum/magenta operations-console palette (see .seller-scope).
    ============================================================ */
 :root {
   color-scheme: light;
 
   /* text */
-  --ink: #171634;
-  --ink-soft: #454467;
-  --ink-muted: #6a6a8c;
-  --ink-faint: #9695b4;
+  --ink: #26102f;
+  --ink-soft: #52395c;
+  --ink-muted: #6f5578;
+  --ink-faint: #a08fab;
 
   /* light surfaces */
-  --page-bg: #eef0f9;
+  --page-bg: #f6eef9;
   --surface: #ffffff;
-  --surface-sunken: #f4f5fc;
-  --surface-hover: #e9ebf7;
-  --border: #e1e3f0;
-  --border-strong: #c3c6dd;
+  --surface-sunken: #fbf4fb;
+  --surface-hover: #f2e6f6;
+  --border: #ecdff0;
+  --border-strong: #cdb6d6;
 
   /* dark chrome (header, nav, footer) */
-  --chrome-900: #161038;
-  --chrome-800: #1e1651;
-  --chrome-700: #2a2070;
-  --chrome-600: #3a2f8e;
-  --on-chrome: #f1f0ff;
-  --on-chrome-soft: #b6b2e6;
-  --on-chrome-faint: #8a86bd;
+  --chrome-900: #1c0733;
+  --chrome-800: #2a0d4a;
+  --chrome-700: #3d1668;
+  --chrome-600: #55238c;
+  --on-chrome: #fdf0fa;
+  --on-chrome-soft: #d9bfe9;
+  --on-chrome-faint: #a98cc0;
 
-  /* accent — mint / cyan */
-  --accent: #2ad6bd;
-  --accent-strong: #14bda4;
-  --accent-deep: #0f7b8a; /* passes contrast on white */
-  --accent-tint: #d9faf3;
-  --on-accent: #062622;
+  /* accent — rose pink */
+  --accent: #ff7ab0;
+  --accent-strong: #f2559a;
+  --accent-deep: #b31366; /* passes contrast on white */
+  --accent-tint: #ffe3ef;
+  --on-accent: #3d0420;
 
   /* interactive */
   --link: var(--accent-deep);
   --link-hover: #6d28d9;
-  --cta-bg: #2ad6bd;
-  --cta-bg-hover: #14bda4;
+  --cta-bg: #ff5fa2;
+  --cta-bg-hover: #f0428d;
   --cta-ink: var(--on-accent);
-  --cta-border: #12b5a0;
-  --ring: rgba(42, 214, 189, 0.55);
-  --ring-solid: #12b5a0;
+  --cta-border: #f0428d;
+  --ring: rgba(255, 95, 162, 0.55);
+  --ring-solid: #d62e86;
 
   /* semantic */
   --rating: #7c3aed;
-  --success: #0b7a54;
-  --success-tint: #d8f5e9;
+  --success: #1f7a3d;
+  --success-tint: #e0f3e4;
   --danger: #c01e4f;
   --danger-tint: #fde4ec;
   --pending: #5b21b6;
   --pending-tint: #eae4fc;
 
-  --shadow-card: 0 1px 2px rgba(23, 22, 52, 0.08), 0 6px 18px rgba(23, 22, 52, 0.06);
+  --shadow-card: 0 1px 2px rgba(38, 16, 47, 0.08), 0 6px 18px rgba(38, 16, 47, 0.06);
   --radius: 10px;
 }
 
-/* Seller Central — same brand, plum/violet operations console. */
+/* Seller Central — same brand, deeper plum/magenta operations console. */
 .seller-scope {
-  --page-bg: #f5f0fa;
-  --surface-sunken: #faf5fd;
-  --surface-hover: #f0e6f8;
-  --border: #ebdff3;
-  --border-strong: #d3bfe1;
+  --page-bg: #f6f0f6;
+  --surface-sunken: #fbf5fa;
+  --surface-hover: #f0e3ee;
+  --border: #e8dbe7;
+  --border-strong: #cdb4ca;
 
-  --chrome-900: #27093a;
-  --chrome-800: #380f51;
-  --chrome-700: #4b1a6b;
-  --chrome-600: #642a8a;
-  --on-chrome: #f8eefe;
-  --on-chrome-soft: #d7b6ea;
-  --on-chrome-faint: #a98ac0;
+  --chrome-900: #200424;
+  --chrome-800: #310734;
+  --chrome-700: #4a0f4c;
+  --chrome-600: #661a63;
+  --on-chrome: #fbeaf7;
+  --on-chrome-soft: #e0b8d8;
+  --on-chrome-faint: #b08aa8;
 
-  --accent: #e879f9;
-  --accent-strong: #d24ae8;
-  --accent-deep: #9c1fb5;
-  --accent-tint: #fae3fe;
-  --on-accent: #2d0838;
+  --accent: #f472c6;
+  --accent-strong: #d93fa8;
+  --accent-deep: #a3176f;
+  --accent-tint: #fbe2f2;
+  --on-accent: #300522;
 
   --link: var(--accent-deep);
-  --link-hover: #4b1a6b;
-  --cta-bg: #8b2fd6;
-  --cta-bg-hover: #7526bb;
+  --link-hover: #4a0f4c;
+  --cta-bg: #b31f7d;
+  --cta-bg-hover: #99186a;
   --cta-ink: #ffffff;
-  --cta-border: #7526bb;
-  --ring: rgba(210, 74, 232, 0.5);
-  --ring-solid: #b23ccc;
+  --cta-border: #99186a;
+  --ring: rgba(201, 58, 151, 0.5);
+  --ring-solid: #c93a97;
 
-  --rating: #9c1fb5;
-  --pending: #7526bb;
-  --pending-tint: #f0e5fa;
+  --rating: #a3176f;
+  --pending: #7b2296;
+  --pending-tint: #f2e4f8;
 
   background: var(--page-bg);
   display: flow-root;

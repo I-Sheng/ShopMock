@@ -33,8 +33,8 @@ export default function ProductCard({ product, qty, categoryName }) {
   const dollars = Math.floor(product.price_cents / 100);
   const cents = String(product.price_cents % 100).padStart(2, '0');
   const emoji = CATEGORY_EMOJI[categoryName] || '📦';
-  // Keep the per-product tint inside the brand arc (mint → indigo → violet).
-  const hue = 165 + ((product.id * 67) % 130);
+  // Keep the per-product tint inside the brand arc (violet → purple → rose pink).
+  const hue = 285 + ((product.id * 67) % 50);
 
   const onAdd = () => {
     add(product.id);
@@ -47,7 +47,7 @@ export default function ProductCard({ product, qty, categoryName }) {
       <div
         className="card-img"
         style={{
-          background: `linear-gradient(135deg, hsl(${hue} 52% 90%), hsl(${hue + 28} 48% 78%))`,
+          background: `linear-gradient(135deg, hsl(${hue} 62% 92%), hsl(${hue + 15} 58% 80%))`,
         }}
       >
         <span>{emoji}</span>
