@@ -69,6 +69,28 @@ sql_code_has() { sql_code "$1" | grep -qE "$2"; }
 py_code_has() { local pattern="$1"; shift; py_code "$@" | grep -qE "$pattern"; }
 service_has() { service_block "$1" "$2" | grep -qE "$3"; }
 
+# Exercise the deploy script's real redirect helpers without running the deploy.
+deploy_public_origin() {
+  printf '%s' "${PUBLIC_ORIGIN:-http://shopmock.example.test}"
+}
+
+deploy_redirect_json() (
+  eval "$(awk '
+    /^redirect_paths\(\)/ { capture=1 }
+    capture { print }
+    capture && /^}/ { closed++; if (closed == 2) exit }
+  ' "$DEPLOY")"
+  public_origin="$(deploy_public_origin)" || return 1
+  redirect_json "$1"
+)
+
+storefront_redirect_globs_are_literal() {
+  local public_origin
+  public_origin="$(deploy_public_origin)" || return 1
+  [ "$(deploy_redirect_json storefront)" = \
+    "[\"http://localhost/*\",\"$public_origin/*\"]" ]
+}
+
 group "Keycloak realm seed ($REALM)"
 check "realm seed is valid JSON" jq -e . "$REALM"
 for role in finance hr; do
@@ -222,6 +244,7 @@ check "the vm override routes hr-portal through Traefik" \
 
 group "Deployment ($DEPLOY)"
 check "deploy is syntactically valid bash" bash -n "$DEPLOY"
+check "deploy preserves wildcard redirect paths literally" storefront_redirect_globs_are_literal
 check "deploy waits for hr-db" grep -qE 'for db in .*hr-db' "$DEPLOY"
 check "deploy converges the finance realm role" grep -q 'ensure_realm_role finance' "$DEPLOY"
 check "deploy converges the hr realm role" grep -q 'ensure_realm_role hr ' "$DEPLOY"

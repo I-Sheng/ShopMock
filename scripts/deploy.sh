@@ -324,11 +324,11 @@ redirect_paths() {
 }
 
 redirect_json() {   # every path, under http://localhost and the public origin
-  local origins=("http://localhost") out=() origin path
+  local origins=("http://localhost") out=() paths=() origin path
   [ "$public_origin" != http://localhost ] && origins+=("$public_origin")
+  read -ra paths <<<"$(redirect_paths "$1")"
   for origin in "${origins[@]}"; do
-    # Word splitting is the point: redirect_paths emits a space-separated list.
-    for path in $(redirect_paths "$1"); do out+=("\"$origin$path\""); done
+    for path in "${paths[@]}"; do out+=("\"$origin$path\""); done
   done
   local IFS=,
   printf '[%s]' "${out[*]}"
