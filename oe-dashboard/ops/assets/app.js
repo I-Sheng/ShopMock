@@ -5,8 +5,13 @@
  * the page runs under a CSP with no 'unsafe-inline' and no external origins.
  *
  * Nothing here is a security control: the browser only decides what to draw.
- * Every answer about container state comes from /api/containers, which verifies
- * the token and the it-ops realm role server-side.
+ * Every answer about container state comes from /api/containers, and every
+ * answer about security alerts from /api/security/alerts — both verify the
+ * token and the it-ops realm role server-side, on every request.
+ *
+ * Alert text is log content and therefore attacker-influenced, so every value
+ * below reaches the DOM through textContent — no markup sink is used anywhere
+ * in this file, which a test asserts.
  */
 (function () {
   'use strict';
@@ -295,7 +300,103 @@
     });
   }
 
-  function render(payload) {
+  /* --------------------------------------------------- security monitoring */
+
+  var SEC_TILES = [
+    { key: 'total', label: 'Alerts', tone: function () { return 'none'; } },
+    { key: 'critical', label: 'Critical', tone: function (v) { return v ? 'bad' : 'none'; } },
+    { key: 'high', label: 'High', tone: function (v) { return v ? 'bad' : 'none'; } },
+    { key: 'medium', label: 'Medium', tone: function (v) { return v ? 'warn' : 'none'; } },
+    { key: 'low', label: 'Low', tone: function () { return 'none'; } }
+  ];
+
+  // Wazuh's own bands, matching the server-side summary.
+  function levelTone(level) {
+    if (typeof level !== 'number') return 'none';
+    if (level >= 12) return 'bad';
+    if (level >= 8) return 'bad';
+    if (level >= 4) return 'warn';
+    return 'none';
+  }
+
+  function levelLabel(level) {
+    return typeof level === 'number' ? String(level) : '—';
+  }
+
+  // Wazuh stamps "+0000" rather than "+00:00"; normalize before parsing so the
+  // column does not silently become "Invalid Date".
+  function alertTime(value) {
+    if (typeof value !== 'string' || !value) return '—';
+    var parsed = new Date(value.replace(/([+-]\d{2})(\d{2})$/, '$1:$2'));
+    return isNaN(parsed.getTime()) ? value.slice(0, 32) : parsed.toLocaleString();
+  }
+
+  function renderSecTiles(summary) {
+    var list = el('sec-tiles');
+    list.textContent = '';
+    SEC_TILES.forEach(function (tile) {
+      var value = summary[tile.key] || 0;
+      var li = document.createElement('li');
+      li.className = 'tile';
+      li.setAttribute('data-tone', tile.tone(value));
+      var v = document.createElement('span');
+      v.className = 'tile-value';
+      v.textContent = String(value);
+      var l = document.createElement('span');
+      l.className = 'tile-label';
+      l.textContent = tile.label;
+      li.appendChild(v);
+      li.appendChild(l);
+      list.appendChild(li);
+    });
+  }
+
+  function renderAlertRows(alerts) {
+    var body = el('alert-rows');
+    body.textContent = '';
+    alerts.forEach(function (a) {
+      var row = document.createElement('tr');
+      cell(row, 'Time', alertTime(a.timestamp)).className = 'cell-age';
+      cell(row, 'Level', pill(levelLabel(a.rule_level), levelTone(a.rule_level)));
+      cell(row, 'Rule', a.rule_id || '—').className = 'cell-name';
+      cell(row, 'Description', a.rule_description || '—').className = 'cell-service';
+      cell(row, 'Agent', a.agent_name || a.agent_id || '—').className = 'cell-name';
+      cell(row, 'Location', a.location || '—').className = 'cell-image';
+      body.appendChild(row);
+    });
+  }
+
+  function renderSecurity(payload) {
+    var empty = el('alerts-empty');
+    var unavailable = el('alerts-unavailable');
+    var wrap = el('alerts-wrap');
+
+    if (!payload) {
+      // The alert source is down; container status above stays as rendered.
+      renderSecTiles({});
+      renderAlertRows([]);
+      empty.hidden = true;
+      wrap.hidden = true;
+      unavailable.hidden = false;
+      el('alerts-updated').textContent = 'Alert source unavailable';
+      return 'Security alerts unavailable.';
+    }
+
+    var summary = payload.summary || {};
+    var alerts = payload.alerts || [];
+    renderSecTiles(summary);
+    renderAlertRows(alerts);
+    unavailable.hidden = true;
+    empty.hidden = alerts.length !== 0;
+    wrap.hidden = alerts.length === 0;
+    el('alerts-updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
+
+    if (!alerts.length) return 'No security alerts recorded.';
+    return (summary.total || alerts.length) + ' security alerts, ' +
+      (summary.critical || 0) + ' critical, ' + (summary.high || 0) + ' high.';
+  }
+
+  function render(payload, security) {
     var summary = payload.summary || {};
     var verdict = el('verdict');
     verdict.textContent = summary.ok ? 'All good' : 'Attention';
@@ -305,7 +406,7 @@
     el('updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
     announce(
       summary.total + ' containers, ' + (summary.running || 0) + ' running, ' +
-      (summary.failed || 0) + ' failing.'
+      (summary.failed || 0) + ' failing. ' + renderSecurity(security)
     );
     show('status');
   }
@@ -324,6 +425,38 @@
     timer = window.setTimeout(load, delay);
   }
 
+  // Container status decides the panel: it is the reason this console exists,
+  // and a 401/403 here is the authoritative answer about the session.
+  function statusRequest(token, signal) {
+    return fetch(BASE + 'api/containers', {
+      headers: { Authorization: 'Bearer ' + token },
+      signal: signal,
+      cache: 'no-store'
+    }).then(function (response) {
+      if (response.status === 401) { clearSession(); show('signedout'); return null; }
+      if (response.status === 403) { show('denied'); return null; }
+      if (!response.ok) throw new Error('status service returned ' + response.status);
+      return response.json();
+    });
+  }
+
+  // The alert source is additive: if the SIEM is unreachable, or this operator
+  // is somehow refused by it, the section says so and container status is
+  // rendered exactly as before. Only an abort propagates.
+  function alertsRequest(token, signal) {
+    return fetch(BASE + 'api/security/alerts', {
+      headers: { Authorization: 'Bearer ' + token },
+      signal: signal,
+      cache: 'no-store'
+    }).then(function (response) {
+      if (!response.ok) throw new Error('alert service returned ' + response.status);
+      return response.json();
+    }).catch(function (err) {
+      if (err.name === 'AbortError') throw err;
+      return null;
+    });
+  }
+
   function load() {
     if (!session) { show('signedout'); return Promise.resolve(); }
     if (inFlight) inFlight.abort();          // never stack requests
@@ -332,20 +465,13 @@
 
     return freshAccessToken()
       .then(function (token) {
-        return fetch(BASE + 'api/containers', {
-          headers: { Authorization: 'Bearer ' + token },
-          signal: controller.signal,
-          cache: 'no-store'
-        });
+        return Promise.all([
+          statusRequest(token, controller.signal),
+          alertsRequest(token, controller.signal)
+        ]);
       })
-      .then(function (response) {
-        if (response.status === 401) { clearSession(); show('signedout'); return null; }
-        if (response.status === 403) { show('denied'); return null; }
-        if (!response.ok) throw new Error('status service returned ' + response.status);
-        return response.json();
-      })
-      .then(function (payload) {
-        if (payload) { backoff = 0; render(payload); }
+      .then(function (results) {
+        if (results[0]) { backoff = 0; render(results[0], results[1]); }
         schedule(REFRESH_MS);
       })
       .catch(function (err) {

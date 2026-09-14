@@ -240,6 +240,38 @@ h1 { font-size: clamp(1.35rem, 3vw, 1.8rem); margin: 0 0 0.6rem; letter-spacing:
   letter-spacing: 0.11em;
 }
 
+/* -------------------------------------------------------- security monitoring */
+
+/* The section reuses .tiles / .tile / .pill / .table-wrap so the alert view and
+   the container view stay one visual system — only the frame is new here. */
+.security { margin-top: 2.2rem; }
+
+.security-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.6rem;
+  margin-bottom: 0.9rem;
+  padding-top: 1.4rem;
+  border-top: 1px solid var(--border-soft);
+}
+
+.security-head h2 { font-size: 1.05rem; margin: 0; }
+
+/* Quiet-but-working and broken are deliberately different states: an operator
+   must never read "no alerts" off a section that simply failed to load. */
+.empty {
+  background: var(--surface);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  color: var(--muted);
+  margin: 0;
+  padding: 1.1rem 1.2rem;
+  font-size: 0.9rem;
+}
+.empty-bad { border-style: solid; border-color: var(--danger); color: var(--danger); }
+
 /* -------------------------------------------------------------------- table */
 
 .table-wrap {

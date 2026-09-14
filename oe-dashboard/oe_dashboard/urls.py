@@ -11,4 +11,5 @@ urlpatterns = [
     path('pkce.js', views.pkce_js),
     path('app.js', views.app_js),
     path('api/containers', views.containers),
+    path('api/security/alerts', views.security_alerts),
 ]

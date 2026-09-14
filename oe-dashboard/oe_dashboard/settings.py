@@ -14,6 +14,14 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+
+def _flag(name, default):
+    """An env flag that fails *safe*: unset or blank keeps the secure default."""
+    raw = (os.environ.get(name) or '').strip().lower()
+    if not raw:
+        return default
+    return raw not in ('0', 'false', 'no', 'off')
+
 SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'lab-only-insecure-key')
 DEBUG = os.environ.get('DJANGO_DEBUG', '') == '1'
 ALLOWED_HOSTS = ['*']  # reachable only through the Traefik edge
@@ -88,3 +96,23 @@ OE_PROJECT_NAME = os.environ.get('OE_PROJECT_NAME', 'shopmock')
 # socket itself is never mounted into this container. See docker-compose.yml.
 OE_CONTAINER_API = os.environ.get('OE_CONTAINER_API', 'http://oe-socket-proxy:2375')
 OE_CONTAINER_API_TIMEOUT = float(os.environ.get('OE_CONTAINER_API_TIMEOUT', '5'))
+
+# --------------------------------------------------------------- security alerts
+# Wazuh alerts are read from OpenSearch over soc_net. Strictly read-only: this
+# console never writes an index and never talks to the Wazuh manager API.
+#
+# Like the realm JWK above, nothing here is read at import time by a *test* —
+# blanks are allowed so the image builds and self-checks without credentials,
+# and a request that needs them fails closed as a 502.
+OE_OPENSEARCH_URL = os.environ.get('OE_OPENSEARCH_URL', 'https://search:9200')
+OE_OPENSEARCH_USER = os.environ.get('OE_OPENSEARCH_USER', '')
+OE_OPENSEARCH_PASSWORD = os.environ.get('OE_OPENSEARCH_PASSWORD', '')
+# Index *pattern*, not a caller-supplied index: the endpoint never takes one.
+OE_ALERT_INDEX = os.environ.get('OE_ALERT_INDEX', 'wazuh-alerts-*')
+OE_OPENSEARCH_TIMEOUT = float(os.environ.get('OE_OPENSEARCH_TIMEOUT', '5'))
+# Verified TLS unless a deployment deliberately opts out — which the lab does,
+# because its OpenSearch still serves the bundled demo certificate. See README.
+OE_OPENSEARCH_VERIFY_TLS = _flag('OE_OPENSEARCH_VERIFY_TLS', True)
+# Page size for the recent-alerts list. `alerts.MAX_LIMIT` caps this regardless,
+# so a fat-fingered override cannot turn the endpoint into a SIEM export.
+OE_ALERT_LIMIT = int(os.environ.get('OE_ALERT_LIMIT', '25'))

@@ -18,6 +18,7 @@ from django.views.decorators.http import require_GET
 from .auth import AuthError, require_it_ops
 from .containers import normalize_containers, summarize
 from .docker_client import list_containers
+from .opensearch_client import fetch_alerts
 
 log = logging.getLogger(__name__)
 
@@ -95,6 +96,37 @@ def containers(request):
         'generated_at': datetime.now(timezone.utc).isoformat(),
         'summary': summarize(normalized),
         'containers': normalized,
+    })
+    response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
+@require_GET
+def security_alerts(request):
+    """Wazuh alert summary for the same it-ops audience as container status.
+
+    Authorization is settled before `fetch_alerts` is imported into the call,
+    so a caller without the role never causes a query against the SIEM. An
+    empty alert store is a normal 200 with zeroed counts — the SIEM being quiet
+    is not an error, and the console has to be able to say so.
+    """
+    try:
+        require_it_ops(request)
+    except AuthError as exc:
+        return JsonResponse({'error': str(exc)}, status=exc.status)
+
+    try:
+        model = fetch_alerts()
+    except Exception:
+        # The index URL, the OpenSearch account and the backend error stay in
+        # the log; the caller learns only that the source is unavailable.
+        log.exception('security alert backend failed')
+        return JsonResponse({'error': 'security alerts unavailable'}, status=502)
+
+    response = JsonResponse({
+        'generated_at': datetime.now(timezone.utc).isoformat(),
+        'summary': model['summary'],
+        'alerts': model['alerts'],
     })
     response.headers['Cache-Control'] = 'no-store'
     return response

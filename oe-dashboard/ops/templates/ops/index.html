@@ -105,14 +105,54 @@
         <tbody id="rows"></tbody>
       </table>
     </div>
+
+    <section id="security" class="security" aria-labelledby="security-title">
+      <div class="security-head">
+        <h2 id="security-title">Security monitoring</h2>
+        <p id="alerts-updated" class="updated">&nbsp;</p>
+      </div>
+
+      <ul id="sec-tiles" class="tiles"></ul>
+
+      <p id="alerts-empty" class="empty" role="status" hidden>
+        No alerts have been recorded yet. The Wazuh manager is running; alerts
+        appear here once agents are enrolled and shipping to the alert index.
+      </p>
+
+      <p id="alerts-unavailable" class="empty empty-bad" role="status" hidden>
+        The security alert source is unavailable. Container status above is
+        unaffected.
+      </p>
+
+      <div id="alerts-wrap" class="table-wrap" hidden>
+        <table id="alerts">
+          <caption class="sr-only">
+            The most recent Wazuh alerts, newest first, with rule level,
+            rule description, reporting agent and log location.
+          </caption>
+          <thead>
+            <tr>
+              <th scope="col">Time</th>
+              <th scope="col">Level</th>
+              <th scope="col">Rule</th>
+              <th scope="col">Description</th>
+              <th scope="col">Agent</th>
+              <th scope="col">Location</th>
+            </tr>
+          </thead>
+          <tbody id="alert-rows"></tbody>
+        </table>
+      </div>
+    </section>
   </section>
 
   <p id="live" class="sr-only" role="status" aria-live="polite"></p>
 </main>
 
 <footer class="foot">
-  Read-only container status. Environment variables, commands, mounts and
-  secrets are never read or exposed by this console.
+  Read-only container status and security-alert metadata. Environment variables,
+  commands, mounts, raw log contents and secrets are never read or exposed by
+  this console.
 </footer>
 
 <script src="pkce.js"></script>

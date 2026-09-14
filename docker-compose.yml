@@ -56,7 +56,9 @@ services:
       OPENSEARCH_JAVA_OPTS: -Xms512m -Xmx512m
     ulimits:
       memlock: { soft: -1, hard: -1 }
-    networks: [edge_net]
+    # soc_net is the read path for the IT console's security section: it queries
+    # the wazuh-alerts-* index here. Catalog traffic keeps using edge_net.
+    networks: [edge_net, soc_net]
 
   search-dashboard:
     image: opensearchproject/opensearch-dashboards:2.13.0
@@ -252,10 +254,26 @@ services:
       OE_REQUIRED_ROLE: ${OE_REQUIRED_ROLE:-it-ops}
       OE_PROJECT_NAME: ${OE_PROJECT_NAME:-shopmock}
       OE_CONTAINER_API: ${OE_CONTAINER_API:-http://oe-socket-proxy:2375}
+      # --- security monitoring: read-only Wazuh alert view -------------------
+      # The credential is substituted from the deploy environment; no literal
+      # secret is tracked here. Blank is allowed — the section then reports the
+      # alert source as unavailable instead of failing the console.
+      OE_OPENSEARCH_URL: ${OE_OPENSEARCH_URL:-https://search:9200}
+      OE_OPENSEARCH_USER: ${OE_OPENSEARCH_USER:-wazuh-dashboard-reader}
+      OE_OPENSEARCH_PASSWORD: ${WAZUH_DASHBOARD_PASSWORD:-}
+      OE_ALERT_INDEX: ${OE_ALERT_INDEX:-wazuh-alerts-*}
+      OE_ALERT_LIMIT: ${OE_ALERT_LIMIT:-25}
+      OE_OPENSEARCH_TIMEOUT: ${OE_OPENSEARCH_TIMEOUT:-5}
+      # This lab's OpenSearch still serves the bundled demo certificate, which
+      # no CA store can validate — so verification is off *here* by default and
+      # the application default stays on. Outside the lab, set this to true and
+      # give the image the issuing CA.
+      OE_OPENSEARCH_VERIFY_TLS: ${OE_OPENSEARCH_VERIFY_TLS:-false}
     # No socket and no database: this container terminates browser requests, so
     # it holds nothing an XSS/RCE could turn into runtime control. It reads
-    # status over ops_net from the proxy below.
-    networks: [tier2_net, ops_net]
+    # status over ops_net from the proxy below, and the alert index over
+    # soc_net — outbound queries only, with a read-only OpenSearch account.
+    networks: [tier2_net, ops_net, soc_net]
     depends_on: [oe-socket-proxy]
     labels:
       traefik.enable: "true"
