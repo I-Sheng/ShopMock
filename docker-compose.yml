@@ -478,6 +478,7 @@ services:
     environment:
       OS_URL: https://search:9200
       OS_AUTH: admin:${OPENSEARCH_ADMIN_PASSWORD}
+      WAZUH_DASHBOARD_PASSWORD: ${WAZUH_DASHBOARD_PASSWORD}
     entrypoint: ["/bin/sh", "/seed/index-catalog.sh"]
     volumes:
       - ./seed/search:/seed:ro,z

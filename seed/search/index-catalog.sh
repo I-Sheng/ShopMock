@@ -18,6 +18,40 @@ until $CURL -f "$OS_URL/_cluster/health" >/dev/null 2>&1; do
   sleep 2
 done
 
+# OE's web-facing process gets no cluster or catalog privileges. Converge a
+# dedicated internal user and map it to a role that can only search Wazuh alert
+# indices. Restrict the password alphabet so embedding it in this JSON remains
+# unambiguous in this minimal curl-only seed image.
+case "${WAZUH_DASHBOARD_PASSWORD:-}" in
+  ''|*[!A-Za-z0-9._-]*)
+    echo "WAZUH_DASHBOARD_PASSWORD must use only letters, digits, dot, underscore, or hyphen." >&2
+    exit 1
+    ;;
+esac
+
+echo "Converging read-only Wazuh dashboard identity ..."
+$CURL -f -X PUT "$OS_URL/_plugins/_security/api/roles/wazuh_dashboard_reader" \
+  -H 'Content-Type: application/json' -d '{
+    "cluster_permissions": [],
+    "index_permissions": [{
+      "index_patterns": ["wazuh-alerts-*"],
+      "allowed_actions": ["read"]
+    }],
+    "tenant_permissions": []
+  }' >/dev/null
+
+$CURL -f -X PUT "$OS_URL/_plugins/_security/api/internalusers/wazuh-dashboard-reader" \
+  -H 'Content-Type: application/json' \
+  -d "{\"password\":\"$WAZUH_DASHBOARD_PASSWORD\",\"backend_roles\":[],\"attributes\":{}}" \
+  >/dev/null
+
+$CURL -f -X PUT "$OS_URL/_plugins/_security/api/rolesmapping/wazuh_dashboard_reader" \
+  -H 'Content-Type: application/json' -d '{
+    "backend_roles": [],
+    "hosts": [],
+    "users": ["wazuh-dashboard-reader"]
+  }' >/dev/null
+
 echo "Creating index 'catalog' on $OS_URL ..."
 $CURL -X PUT "$OS_URL/catalog" -H 'Content-Type: application/json' -d '{
   "mappings": { "properties": {

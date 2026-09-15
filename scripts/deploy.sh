@@ -90,6 +90,7 @@ ensure_env_var() {   # <name> [prefix]
 ensure_env_var SELLER_BACKEND_DB_PASSWORD
 ensure_env_var FINANCE_PORTAL_DB_PASSWORD
 ensure_env_var HR_PORTAL_DB_PASSWORD
+ensure_env_var WAZUH_DASHBOARD_PASSWORD
 # FreeIPA rejects passwords that are too simple, so these carry a class-mixed
 # prefix. A generated value only matters for an identity that does not exist
 # yet: seed/ipa/bootstrap.sh is create-if-missing and never resets a password.

@@ -176,6 +176,12 @@ HTTP 400 errors. `search-data` persists both catalog and Wazuh indices; after a
 first deployment that introduces this volume, rerun `search-seed` to restore
 the catalog documents.
 
+`search-seed` also converges the `wazuh-dashboard-reader` internal account and
+maps it to `wazuh_dashboard_reader`, which has read-only access to
+`wazuh-alerts-*` and no catalog or cluster permissions. Its private
+`WAZUH_DASHBOARD_PASSWORD` comes from `.env`; `scripts/deploy.sh` generates a
+JSON-safe value when an older VM environment does not have one.
+
 ```bash
 # All monitoring containers are running; manager and agent are version-aligned.
 podman compose ps wazuh wazuh-agent wazuh-journal-relay
