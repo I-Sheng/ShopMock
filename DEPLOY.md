@@ -1,84 +1,83 @@
-# Deploying ShopMock to the lab VM
+# Deploying and operating ShopMock
 
-How to deploy the stack to the target machine — the UWB VM
-(`shopmock.uwb.edu`), a **rootless Podman** host — either by hand or through
-the CD pipeline. For what the stack *is*, see [`README.md`](README.md) and
-[`INFRA_BUILD_SPEC.md`](INFRA_BUILD_SPEC.md).
+The single operational guide for both targets: a Docker dev machine and the UWB
+lab VM (`shopmock.uwb.edu`), a rootless Podman host. `scripts/deploy.sh` handles
+both; it detects the runtime and applies the VM override automatically.
 
-The same script also runs on a plain Docker dev machine (it falls back to
-`docker compose` automatically); everything Podman-specific below simply
-doesn't apply there.
+See [`README.md`](README.md) for orientation and [`INFRA_BUILD_SPEC.md`](INFRA_BUILD_SPEC.md) for the service inventory.
 
-## How the VM differs from a dev machine
+## How the two targets differ
 
-| | Dev machine (Docker) | UWB VM (rootless Podman) |
+| | Dev machine (Docker) | Lab VM (rootless Podman) |
 | --- | --- | --- |
-| Runtime | docker daemon | rootless podman + API socket (no sudo anywhere) |
-| Compose files | `docker-compose.yml` only | + `docker-compose.vm.yml` override (**required**) |
-| Networks | tiered (`dmz_net`, `tier1_net`, …) | single external `sandboxnet` (campus policy) |
-| Edge binding | `0.0.0.0:80` | `127.0.0.1:5002` (campus URL `http://shopmock.uwb.edu/isheng07/` forwards here) |
-| Other ports | various | all bind `127.0.0.1` only; PAW on `:2202` (`:22` is the VM's own sshd), FreeIPA Web UI on `:8443` |
-| Tier 0 | `tier0_net` segment (FreeIPA DC + PAW) | flat `sandboxnet` — Tier 0 enforced by **FreeIPA HBAC** (identity), not network |
-| Traefik's Docker socket | `/var/run/docker.sock` | the podman socket, remapped by the override |
+| Runtime | docker daemon | rootless podman plus its API socket, no sudo anywhere |
+| Compose files | `docker-compose.yml` | plus `docker-compose.vm.yml`, required |
+| Networks | tiered, all internal except `edge_net` and `bastion_net` | one external `sandboxnet`; `hr_net` and `ops_net` still private |
+| Edge | `0.0.0.0:80` | `127.0.0.1:5002`; the campus URL `http://shopmock.uwb.edu/isheng07/` forwards there |
+| Tier 0 | `tier0_net` segment | flat network, enforced by FreeIPA HBAC instead |
+| Traefik provider socket | `/var/run/docker.sock` | the podman socket, remapped by the override |
+| Wazuh | manager only | manager plus a container-only agent and journal relay |
 
-The override is the load-bearing piece: rootless podman **cannot** create
-`/var/run/docker.sock`, so running with the base compose file alone fails with
+Besides the edge, the stack publishes the Traefik dashboard on `8088`, the
+Keycloak admin console on `8081`, OpenSearch Dashboards on `5602`, Vault on
+`8200`, and the FreeIPA web UI on `8443`. None is public: on the VM every one
+binds loopback only, so reach them by tunnelling through the PAW. PAW SSH is
+`22` on a dev machine and `127.0.0.1:2202` on the VM, whose `:22` is its own
+sshd.
+
+The override is the load-bearing piece: rootless podman cannot create
+`/var/run/docker.sock`, so the base file alone fails with
 `mkdir /var/run/docker.sock: permission denied`. `scripts/deploy.sh` activates
-the override automatically on a podman host — and aborts with an explanation
-if a stale `COMPOSE_FILE` in `.env` would prevent that.
+the override on a podman host and aborts with an explanation if a stale
+`COMPOSE_FILE` in `.env` would prevent that.
 
-## One-time host setup
+## One-time host setup, VM only
 
 ```bash
-# 1. Podman API socket (rootless, survives logout with linger enabled)
+# 1. Podman API socket, rootless, surviving logout
 systemctl --user enable --now podman.socket
 loginctl enable-linger "$USER"
 ls -l /run/user/$(id -u)/podman/podman.sock     # must exist
 
-# 2. The admin-mandated network (compose declares it external, so create it once)
+# 2. The admin-mandated network; compose declares it external
 podman network create --internal --subnet 10.202.0.0/24 sandboxnet
 
-# 3. A compose provider that understands `!override` tags:
-#    docker-compose v2 binary >= 2.24 (the Python podman-compose does NOT work)
-podman compose version    # check what provider it delegates to
+# 3. A compose provider that understands `!override` tags: the docker-compose v2
+#    binary >= 2.24. The Python podman-compose does not work.
+podman compose version
 
 # 4. Clone
 git clone git@github.com:I-Sheng/ShopMock.git && cd ShopMock
 ```
 
-## `.env` on the VM
+FreeIPA needs cgroups v2 and refuses `--privileged`; confirm
+`podman info | grep cgroupVersion` reports `v2` and that roughly 2 GB is free
+for it.
 
-```bash
-cp .env.example .env
-```
+## Environment
 
-Then adjust:
+Run `cp .env.example .env`, then:
 
-1. **Add the two VM-only lines** (not in `.env.example`):
+- VM only: add `COMPOSE_FILE=docker-compose.yml:docker-compose.vm.yml` and
+  `DOCKER_SOCK=/run/user/<uid>/podman/podman.sock`. deploy.sh sets both when it
+  detects podman, but having them in `.env` makes manual `podman compose ps` and
+  `logs` work too. Never leave a `COMPOSE_FILE` line that omits the override, as
+  the script refuses to run with one.
+- `PUBLIC_ORIGIN`: the browser-visible origin, with no path. Deploy applies it to
+  every Keycloak client's redirect URIs and web origins and derives the trusted
+  CIAM issuer from it.
+- `PGRST_JWT_SECRET`: keep byte-identical to `.env.example`. It is the pinned
+  RS256 public JWK matching the signing key in
+  `seed/identity/realm-shopmock-ciam.json`; changing it breaks token
+  verification in every PostgREST service and all five Django services.
+- Everything else can keep its lab value; the role scripts re-`ALTER` database
+  passwords from `.env` on every deploy. The four service-role passwords,
+  `WAZUH_DASHBOARD_PASSWORD`, `IPA_FINANCE_PASSWORD`, and `IPA_HR_PASSWORD` are
+  generated and appended when an older `.env` lacks them. `OE_USERNAME` and
+  `OE_PASSWORD` are vestigial; `/oe` is OIDC only and reads neither.
 
-   ```bash
-   COMPOSE_FILE=docker-compose.yml:docker-compose.vm.yml
-   DOCKER_SOCK=/run/user/1000/podman/podman.sock    # your uid: /run/user/$(id -u)/...
-   ```
-
-   `scripts/deploy.sh` sets both automatically when it detects podman, but
-   having them in `.env` means manual `podman compose ps` / `logs` commands
-   work too. **Never** leave a `COMPOSE_FILE` line that omits
-   `docker-compose.vm.yml` — the deploy script refuses to run with one.
-
-2. **Keep `PGRST_JWT_SECRET` byte-identical to `.env.example`.** It is the
-   pinned RS256 *public* JWK matching the realm signing key in
-   `seed/identity/realm-shopmock.json`; changing it breaks token verification
-   in every PostgREST service and both Django backends.
-
-3. **Make sure `SELLER_BACKEND_DB_PASSWORD` is present** (newer than some
-   `.env` copies). If missing, the deploy script generates one and appends it
-   to `.env` — but add it to the canonical env file so the warning stops.
-
-4. Everything else (`PG_SUPERUSER_PASSWORD`, `KC_ADMIN_*`, `BASTION_*`,
-   `DJANGO_SECRET_KEY`, `INTERNAL_BACKEND_DB_PASSWORD`, …) can keep its lab
-   value or be changed freely — they only need to be internally consistent,
-   and the role scripts re-`ALTER` DB passwords from `.env` on every deploy.
+A FreeIPA password only takes effect for an identity that does not yet exist,
+since the bootstrap never resets one. Use `ipa passwd <login>` on the DC.
 
 ## Deploying
 
@@ -86,251 +85,176 @@ Then adjust:
 bash scripts/deploy.sh
 ```
 
-The script is idempotent — safe to re-run on every push. It:
+Idempotent and safe to re-run on every push. In order it:
 
-1. detects podman, starts/points at its socket, activates the vm override;
-2. fills in any missing new `.env` variables with generated lab values;
-3. `compose up -d --build` (rebuilds changed images, starts everything);
-4. waits for `customer-db`, `orders-db`, `finance-db`, `catalog-db` —
-   **aborting with that DB's logs** if one never becomes ready;
-5. re-applies the RPC functions and the `internal_backend` +
-   `seller_backend` DB roles (initdb scripts only run on fresh volumes, so
-   deploys onto existing volumes must do this explicitly);
-6. `NOTIFY`s PostgREST to reload schema caches;
-7. updates environment-specific Keycloak redirect origins;
-8. waits for FreeIPA and re-applies the idempotent users/groups/HBAC bootstrap.
+1. detects podman, starts and points at its socket, activates the VM override;
+2. fills in any missing `.env` variables with generated lab values;
+3. relaxes seed file modes, and relabels them with `chcon` under SELinux;
+4. runs `compose up -d --build`;
+5. waits for all five databases, aborting with that database's logs if one never
+   becomes ready;
+6. reapplies the RPC functions, the `07_token_boundary.sql` pre-request hooks,
+   and the four service roles, then `NOTIFY`s PostgREST to reload its schema
+   caches, since initdb scripts only run on fresh volumes;
+7. sets `app.ciam_issuer` with `ALTER DATABASE` and force-recreates
+   `customer-svc`, `order-svc`, and `checkout-svc`, because pooled sessions do
+   not inherit a changed database setting;
+8. imports `shopmock-ciam` and `shopmock-workforce` into an existing Keycloak
+   volume, disables the retired mixed `shopmock` realm without deleting it, and
+   converges the workforce realm roles, the `/workforce/<name>` groups and their
+   role mappings, the three PKCE browser clients, and every client's redirect
+   URIs and web origins for `PUBLIC_ORIGIN`;
+9. waits for FreeIPA and applies the groups, users, and HBAC bootstrap, then
+   points Keycloak's LDAP federation at the least-privilege bind identity and
+   sets the group mapper path and filter.
 
-A healthy run starts like:
+On the VM, confirm the first deploy messages say that Podman and the VM override
+are active. Otherwise stop and fix `.env` before the script changes the stack.
 
-```
-deploy: podman host detected — using vm override (COMPOSE_FILE=docker-compose.yml:docker-compose.vm.yml)
-deploy: using 'podman compose' (DOCKER_HOST=unix:///run/user/1000/podman/podman.sock)
-```
+Step 9 is deliberately non-fatal: FreeIPA's first install is slow, so a
+not-ready DC warns and the next run applies the bootstrap.
 
-If the first two lines don't say that, stop and check `.env` / `git log` —
-the rest of the run is running against the wrong configuration.
+Reseeding from scratch destroys all lab data and is not a routine update:
+`podman compose down -v && bash scripts/deploy.sh`. Use it only for changes to
+first-boot schemas or seed rows that `deploy.sh` does not reconcile. RPCs,
+service roles, token hooks, realm clients/groups, and FreeIPA policy are
+reapplied during a normal deploy.
 
-### Via CI/CD instead
+### Via CI/CD
 
-The `deploy` job in `.github/workflows/cicd.yml` runs `scripts/deploy.sh` on
-the self-hosted runner (`[self-hosted, shopmock]`) for **pushes to `main`
-only**, gated on the repository variable `DEPLOY_ENABLED == 'true'`. The
-checkout has no `.env` (gitignored); the runner supplies it via the
-`SHOPMOCK_ENV_FILE` repository variable pointing at the canonical copy on the
-VM. Feature branches therefore never auto-deploy — merge to `main` or run the
-script by hand.
+`.github/workflows/cicd.yml` runs storefront, backend, portal, seed-SQL, and
+compose-config checks on every push and pull request. Two jobs are restricted to
+pushes on `main`: publishing images to GHCR, and `deploy`, which runs
+`scripts/deploy.sh` on the self-hosted runner (`[self-hosted, shopmock]`) and is
+additionally gated on the repository variable `DEPLOY_ENABLED == 'true'`. The
+checkout has no `.env`, so the runner supplies one through the
+`SHOPMOCK_ENV_FILE` repository variable. Feature branches never auto-deploy.
 
-## Verifying
+## Verification
+
+Substitute the target origin: `http://localhost` on a dev machine,
+`http://127.0.0.1:5002` on the VM. Start with the offline repository checks —
+no stack needed, and the fastest way to catch a wiring regression:
 
 ```bash
-podman compose ps                      # everything Up
-curl -s http://127.0.0.1:5002/ | head  # storefront through the edge
+bash scripts/verify-identity-boundary.sh    # CIAM/workforce realm separation
+bash scripts/verify-it-ops.sh               # /oe identity, topology, socket exposure
+bash scripts/verify-workforce-portals.sh    # finance/HR isolation and grants
+```
+
+Core stack and customer path:
+
+```bash
+podman compose ps                                     # everything Up
+curl -s http://127.0.0.1:5002/ | head
 curl -s http://127.0.0.1:5002/api/catalog/products | head -c 200
 
-# seller login round-trip (token carries role: seller)
+# seller round-trip; the token carries the seller client role
 TOKEN=$(curl -s http://127.0.0.1:5002/auth/realms/shopmock-ciam/protocol/openid-connect/token \
   -d grant_type=password -d client_id=seller-dashboard \
   -d username=nwgadgets -d password='Seller123!' | jq -r .access_token)
-curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:5002/api/seller-backend/listings | jq
-
-# --- Tier 0 (FreeIPA) --------------------------------------------------------------
-# The DC is heavy and slow to install — deploy.sh WARNs (does not abort) if it is not
-# ready, and re-applies the bootstrap idempotently on the next run.
-podman compose logs ipa | tail -20                       # watch first-install progress
-podman compose exec -e IPA_ADMIN_PASSWORD="$(grep ^IPA_ADMIN_PASSWORD= .env | cut -d= -f2-)" \
-  ipa bash -c 'echo "$IPA_ADMIN_PASSWORD" | kinit admin && ipa user-find && ipa hbacrule-find'
-# Expect: employees gadmin + finance.clerk present; hbac rule 'tier0-access' enabled,
-# 'allow_all' disabled — i.e. Tier 0 is deny-by-default, tier0-admins only.
-
-# PAW: systemd supervises enrollment and identity services.
-podman compose exec paw systemctl is-active shopmock-paw-setup sssd oddjobd sshd
-podman compose exec paw id gadmin
-podman compose exec paw sssctl user-checks -a acct -s sshd gadmin
-podman compose exec paw sssctl user-checks -a acct -s sshd finance.clerk
-# Expected: services active; gadmin PAM success; finance.clerk PAM denied.
+curl -s -H "Authorization: Bearer ${TOKEN}" http://127.0.0.1:5002/api/seller-backend/listings | jq
 ```
 
-Workforce login through Keycloak is not yet a deployment acceptance check. The
-LDAP provider reaches FreeIPA and finds `gadmin`, but explicit attribute/group
-mappers still need repair. Native customer and seller authentication remains valid.
+Workforce portals. `/oe`, `/finance`, and `/hr` use authorization code with PKCE
+and have direct grants disabled, so a password grant cannot exercise them; sign
+in from a browser as `it.ops`, `finance.clerk`, and `hr.specialist`. Expect each
+identity to reach only its own portal, `gadmin` to be refused by all three, and a
+missing or malformed token to return 401 rather than 403. The Django suites cover
+the same ground offline through each image's `test` target.
 
-Browser: `http://shopmock.uwb.edu/isheng07/` (storefront) and
-`…/isheng07/seller` (Seller Central). FreeIPA Web UI: tunnel `:8443` through the PAW.
-
-### Container-only Wazuh collector
-
-The VM override runs `wazuh-agent` as a rootless Podman container; do not
-install the `wazuh-agent` package on Ubuntu. The collector and manager must use
-the same pinned version. A networkless `wazuh-journal-relay` mounts the rootless
-user journal read-only, selects only named ShopMock workloads, and writes JSON
-to a shared volume that the agent reads. Wazuh's own containers are excluded to
-avoid a recursive collection loop. The relay is required because Wazuh's
-embedded journal reader opens the bind-mounted rootless journal but returns no
-records; do not simplify this back to a direct journald `<localfile>` source.
-
-The lab reuses the existing OpenSearch JVM because the VM cannot hold another
-indexer. Keep `compatibility.override_main_response_version: "true"` on the
-`search` service: Filebeat OSS 7.10 otherwise mistakes OpenSearch `2.13` for
-Elasticsearch 2.x and sends the removed bulk `_type` field, causing repeated
-HTTP 400 errors. `search-data` persists both catalog and Wazuh indices; after a
-first deployment that introduces this volume, rerun `search-seed` to restore
-the catalog documents.
-
-`search-seed` also converges the `wazuh-dashboard-reader` internal account and
-maps it to `wazuh_dashboard_reader`, which has read-only access to
-`wazuh-alerts-*` and no catalog or cluster permissions. Its private
-`WAZUH_DASHBOARD_PASSWORD` comes from `.env`; `scripts/deploy.sh` generates a
-JSON-safe value when an older VM environment does not have one.
+Tier 0, FreeIPA and the PAW:
 
 ```bash
-# All monitoring containers are running; manager and agent are version-aligned.
-podman compose ps wazuh wazuh-agent wazuh-journal-relay
+podman compose logs ipa | tail -20            # first-install progress
+podman compose exec -e IPA_ADMIN_PASSWORD="$(grep ^IPA_ADMIN_PASSWORD= .env | cut -d= -f2-)" \
+  ipa bash -c 'echo "$IPA_ADMIN_PASSWORD" | kinit admin && ipa user-find && ipa hbacrule-find'
+# Expect gadmin, it.ops, finance.clerk, hr.specialist; tier0-access enabled and
+# allow_all disabled, so Tier 0 is deny-by-default.
 
-# The manager knows the collector and reports it active.
-podman compose exec -T wazuh /var/ossec/bin/agent_control -lc
-
-# Filebeat can publish manager alerts into the lab OpenSearch service.
-podman compose logs --tail 100 wazuh | grep -Ei 'filebeat|indexer|error'
-
-# The collector can read a selected workload's Podman journal.
-journalctl --since '5 minutes ago' \
-  CONTAINER_NAME=shopmock-storefront-1 --no-pager
-
-# The relay buffer is non-empty and Wazuh's file collector reports events.
-podman compose exec -T wazuh-journal-relay wc -l /buffer/podman-journal.json
-podman compose exec -T wazuh-agent \
-  sed -n '1,120p' /var/ossec/var/run/wazuh-logcollector.state
+podman compose exec paw systemctl is-active shopmock-paw-setup sssd oddjobd sshd
+podman compose exec paw sssctl user-checks -a acct -s sshd gadmin
+podman compose exec paw sssctl user-checks -a acct -s sshd finance.clerk
+# Expect services active, gadmin allowed, finance.clerk denied.
 ```
 
-The collector is intentionally not a full Ubuntu endpoint agent: its package,
-process, SCA, and rootcheck views would describe the collector container rather
-than the host, so those modules are disabled. Host-level audit, kernel, package,
-and active-response coverage requires a host agent and is outside this
-container-only deployment.
+Enrollment and identity resolution survive a PAW restart; if they do not, see
+the troubleshooting row for break-glass mode.
 
-Identity migration caveat: deploy now imports/converges `shopmock-ciam` and
-`shopmock-workforce` into an existing Keycloak volume and disables (but does
-not delete) the retired `shopmock` realm. Existing sessions against the retired
-issuer stop working immediately. Native accounts are seeded into CIAM; any
-password/profile changes made only in the retired realm must be migrated or
-reset deliberately after review. FreeIPA users remain in FreeIPA and appear
-only through the workforce realm.
+## Wazuh topology and verification
 
-Database settings caveat: deploy reapplies `07_token_boundary.sql`, sets the
-exact CIAM issuer with `ALTER DATABASE`, and force-recreates the three protected
-PostgREST services. This recreation is required because existing pooled
-PostgreSQL sessions do not inherit a newly changed database setting.
+The manager starts with the core stack on both targets. The VM override adds a
+containerized agent, `shopmock-podman-collector`; do not install the
+`wazuh-agent` package on the Ubuntu host, and keep manager and agent on the same
+pinned version. A networkless `wazuh-journal-relay` mounts the rootless user
+journal read-only, selects only named ShopMock workloads, and writes JSON to a
+shared volume the agent reads, with Wazuh's own containers excluded to avoid a
+collection loop. The relay exists because Wazuh's embedded journal reader opens
+the bind-mounted rootless journal but returns no records; do not simplify it
+back to a direct journald `<localfile>` source. The Podman socket is absent from
+both containers by design.
 
-Seed data caveat: Keycloak realm and DB schema files import **only on fresh
-volumes**. After changing anything under `seed/`, reseed with
-`podman compose down -v && bash scripts/deploy.sh` (destroys all lab data).
+Alerts go to the existing `search` service rather than a dedicated Wazuh
+indexer, which would not fit the VM's memory budget. Keep
+`compatibility.override_main_response_version: "true"` on `search`: without it
+Filebeat OSS 7.10 reads OpenSearch 2.13 as Elasticsearch 2.x, sends the removed
+bulk `_type` field, and loops on HTTP 400. `search-data` holds both catalog and
+Wazuh indices, so rerun `search-seed` after a deployment that first creates that
+volume. `search-seed` also converges the `wazuh-dashboard-reader` account, which
+has read-only access to `wazuh-alerts-*` and nothing else; `/oe` reads alerts
+with it.
+
+The collector is not a full endpoint agent: its package, process, SCA, and
+rootcheck views would describe the container rather than the host, so those
+modules are off.
+
+```bash
+# expect all three up, the agent active, and a non-empty relay buffer
+podman compose ps wazuh wazuh-agent wazuh-journal-relay
+podman compose exec -T wazuh /var/ossec/bin/agent_control -lc
+podman compose logs --tail 100 wazuh | grep -Ei 'filebeat|indexer|error'
+podman compose exec -T wazuh-journal-relay wc -l /buffer/podman-journal.json
+podman compose exec -T wazuh-agent sed -n '1,120p' /var/ossec/var/run/wazuh-logcollector.state
+```
 
 ## Troubleshooting
 
-| Symptom | Cause → fix |
+| Symptom | Cause and fix |
 | --- | --- |
-| `mkdir /var/run/docker.sock: permission denied` | vm override not active — the edge tried to bind the docker socket path from the base file. `git pull`; remove/fix any stale `COMPOSE_FILE` line in `.env`; confirm the run prints the "using vm override" line. No sudo is ever needed. |
-| DB crash-loops with `ls: can't open '/docker-entrypoint-initdb.d/': Permission denied` | two host-side causes, both handled by deploy.sh now: (a) restrictive umask on the checkout (NETID homes: 077) → `chmod -R a+rX seed/`; (b) SELinux enforcing → `chcon -R -t container_file_t seed/` (the mounts also carry the `z` flag, but docker-compose over the podman socket can drop it). Verify with `ls -Z seed/customer-db` — files must show `container_file_t`, not `user_home_t`. After pulling these fixes run `podman compose down -v` once (the crash loop leaves half-initialized, unseeded data volumes) and redeploy. Full walkthrough: [step-by-step recovery](#step-by-step-recovery-seed-permission-crash-loop). |
-| `WARN: The "SELLER_BACKEND_DB_PASSWORD" variable is not set` | `.env` predates the seller backend. Current deploy.sh auto-generates it; add it to the canonical env file to silence permanently. |
-| `can only create exec sessions on running containers` / `service "X" is not running` | containers were created by an earlier failed `up` but never started. `podman compose down` (keeps volumes), then re-run the deploy. |
-| `network sandboxnet declared as external, but could not be found` | one-time setup step 2 was skipped — create the network. |
-| `yaml: unknown !override tag` (or similar parse error) | the compose provider is the Python `podman-compose`, which can't read the override. Install the docker-compose v2 binary (≥ 2.24) so `podman compose` delegates to it, or set `COMPOSE_CMD="docker-compose"`. |
-| `deploy: podman socket not found at …` | `systemctl --user enable --now podman.socket` (and `loginctl enable-linger` so it survives logout). |
-| `deploy: X never became ready — aborting` + logs | read the printed DB logs — this is a real database failure (bad volume, OOM, crash), not a script problem. |
-| Login page loads but sign-in 502s | the stack is still booting behind the edge (Keycloak takes ~30–60 s). Wait and retry. |
-| Everything returns `404 page not found` on `127.0.0.1:5002` | that page is Traefik's "no router matched" — the Docker provider registered nothing, almost always because SELinux denies the edge access to the mounted podman socket (`user_tmp_t`). The vm override sets `security_opt: label=disable` on the edge for this; confirm with `podman compose logs edge \| grep -i "permission\|provider"` and check `curl -s http://127.0.0.1:8088/api/http/routers \| head` lists routers after restarting the edge. |
-| `deploy: WARN FreeIPA not ready — skipping Tier-0 bootstrap` | the DC's first install is slow (several minutes) or failed. It is **non-fatal** — the rest of the stack is fine. Watch `podman compose logs -f ipa`; once it prints `FreeIPA server configured`, just re-run `bash scripts/deploy.sh` to apply the bootstrap. If it never configures: FreeIPA needs **cgroups v2** and refuses `--privileged`; confirm `podman info \| grep cgroupVersion` says `v2` and that the host has ~2 GB free for it. |
-| FreeIPA container exits / `systemd` errors on boot | the systemd-in-container flags need tuning for this host. The service sets `cgroup: host`, `security_opt: seccomp:unconfined`, and tmpfs `/run`+`/tmp`; on some rootless-podman hosts you also need `podman ... --systemd=always`. This is the one bring-up step that may need host-specific iteration — see PLAN_TIER0_FREEIPA.md. |
-| PAW starts in break-glass-only mode | Confirm `ipa` is healthy, then rebuild/recreate the PAW: `podman compose up -d --no-deps --build --force-recreate paw`. Check `journalctl -u shopmock-paw-setup` inside the PAW. The PAW runs systemd and waits for a valid IPA CA before enrollment. |
-| `gadmin` resolves but SSH account checks deny it | Run `ipa hbacrule-show tier0-access`; the rule must list `ipa.shopmock.lab`, `paw.shopmock.lab`, and service `sshd`. Re-run `seed/ipa/bootstrap.sh`, clear SSSD cache, and retest. |
+| `mkdir /var/run/docker.sock: permission denied` | VM override not active. Remove or fix a stale `COMPOSE_FILE` line in `.env` and confirm the run prints the "using vm override" line. No sudo is needed. |
+| DB crash-loops with `ls: can't open '/docker-entrypoint-initdb.d/': Permission denied` | Restrictive umask on the checkout (NETID homes use 077) or SELinux enforcing. deploy.sh handles both; if it still fails see the recovery section below. |
+| `network sandboxnet declared as external, but could not be found` | One-time setup step 2 was skipped. |
+| `yaml: unknown !override tag` | The provider is the Python `podman-compose`. Install the docker-compose v2 binary (>= 2.24), or set `COMPOSE_CMD="docker-compose"`. |
+| `deploy: podman socket not found at …` | `systemctl --user enable --now podman.socket`, plus `loginctl enable-linger`. |
+| `can only create exec sessions on running containers` | Containers were created by an earlier failed `up` but never started. `podman compose down`, which keeps volumes, then redeploy. |
+| `deploy: X never became ready — aborting` | A real database failure. Read the printed logs; this is not a script problem. |
+| Everything returns `404 page not found` on the edge | Traefik matched no router, almost always because SELinux denies the edge the mounted podman socket. The override sets `security_opt: label=disable` for this; check `podman compose logs edge \| grep -i "permission\|provider"` and that `curl -s http://127.0.0.1:8088/api/http/routers` lists routers. |
+| Login page loads but sign-in 502s | Keycloak is still booting behind the edge, 30 to 60 seconds. |
+| `deploy: WARN FreeIPA not ready — skipping Tier-0 bootstrap` | Non-fatal; the rest of the stack is fine. Watch `podman compose logs -f ipa` and re-run deploy once it prints `FreeIPA server configured`. |
+| FreeIPA container exits or errors on boot | The systemd-in-container flags need host tuning. The service sets `cgroup: host`, `seccomp:unconfined`, and tmpfs `/run` and `/tmp`; some hosts also need `podman ... --systemd=always`. |
+| PAW starts in break-glass-only mode | Confirm `ipa` is healthy, then `podman compose up -d --no-deps --build --force-recreate paw`. Check `journalctl -u shopmock-paw-setup` inside the PAW. |
+| `gadmin` resolves but SSH account checks deny it | `ipa hbacrule-show tier0-access` must list `ipa.shopmock.lab`, `paw.shopmock.lab`, and service `sshd`. Re-run the bootstrap, clear the SSSD cache, retest. |
+| A workforce login succeeds but the portal returns 403 | The realm role is missing. Re-run deploy, which reconverges the `/workforce/<name>` group to realm-role mappings, then re-authenticate so the new token carries the role. |
 
-## Step-by-step recovery: seed permission crash-loop
+## Recovery from a seed permission crash-loop
 
-Full walkthrough for the stubborn variant of the
-`ls: can't open '/docker-entrypoint-initdb.d/': Permission denied` crash-loop
-(rootless podman + SELinux). deploy.sh handles all of this automatically —
-when it *still* fails, one of two things is true: the checkout is running old
-code, or the DB volumes were poisoned by earlier crash loops. Work through the
-steps in order; each one verifies before moving on.
-
-### 1. Confirm the checkout has the fixes
+deploy.sh fixes modes and labels automatically, so reaching this means the
+volumes were poisoned by earlier crash loops, the host forbids the relabel, or
+both. A crash-looping Postgres marks its volume initialized before the seed
+scripts run, so it stays permanently empty but claimed and relabelling alone
+cannot recover it.
 
 ```bash
-cd ~/ShopMock          # or wherever the checkout lives
-git fetch origin
-git pull
-git log --oneline -3
-```
-
-The log must include `7362518` (`fix: relabel seed files with chcon ...`) or
-newer. **On an older commit, every later step fails again** — stale checkouts
-have caused repeat failures before.
-
-### 2. Destroy the poisoned database volumes
-
-A crash-looping Postgres marks its data volume "initialized" *before* the
-seed scripts run, so the volume stays permanently empty-but-claimed. Fixing
-file labels does nothing for those volumes — they must go:
-
-```bash
-podman compose down -v
-```
-
-If compose complains about files/socket, be explicit:
-
-```bash
-COMPOSE_FILE=docker-compose.yml:docker-compose.vm.yml \
-DOCKER_SOCK=/run/user/$(id -u)/podman/podman.sock \
-podman compose down -v
-```
-
-### 3. Fix modes and SELinux labels by hand once — and verify
-
-deploy.sh does this too, but doing it manually first shows immediately
-whether `chcon` is allowed on this host at all:
-
-```bash
+podman compose down -v                       # the poisoned volumes must go
 chmod -R a+rX seed/
 chcon -R -t container_file_t seed/
-ls -Z seed/customer-db | head -3
-```
-
-Every line must show `container_file_t`. If it still shows `user_home_t`, or
-`chcon` prints `Operation not permitted`, **stop** — the host policy forbids
-the relabel, and the fix needs a different approach (named volumes instead of
-bind mounts, or an admin request). Don't keep re-running the deploy.
-
-### 4. Deploy
-
-```bash
+ls -Z seed/customer-db | head -3             # every line must show container_file_t
 bash scripts/deploy.sh
 ```
 
-The first two lines must be:
-
-```
-deploy: podman host detected — using vm override (COMPOSE_FILE=docker-compose.yml:docker-compose.vm.yml)
-deploy: using 'podman compose' (DOCKER_HOST=unix:///run/user/<uid>/podman/podman.sock)
-```
-
-If they're not, stop — a stale `COMPOSE_FILE` line in `.env` is steering the
-run at the wrong configuration.
-
-### 5. Confirm the DBs came up seeded
-
-The script fails fast with logs when a DB doesn't start, so a run that
-reaches `deploy: complete` is genuinely healthy. Double-check:
-
-```bash
-podman compose ps                                        # everything Up
-podman compose logs customer-db | grep -i "init\|error" | head
-curl -s http://127.0.0.1:5002/api/catalog/products | head -c 200
-```
-
-Still failing? Collect exactly these three things before digging further —
-together they pinpoint which layer (checkout, labels, or something new) is
-wrong:
-
-1. the **first two lines** of the deploy output,
-2. `ls -Z seed/customer-db | head -3`,
-3. the last ~20 lines the script printed.
+If those lines still show `user_home_t`, or `chcon` prints
+`Operation not permitted`, stop: host policy forbids the relabel, and the fix is
+named volumes instead of bind mounts rather than another deploy. If the relabel
+worked but a database is still unseeded, collect the first two lines of the
+deploy output, `ls -Z seed/customer-db | head -3`, and the last 20 lines the
+script printed; together they identify which layer is wrong.

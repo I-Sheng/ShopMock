@@ -1,320 +1,135 @@
-# ShopMock Infrastructure
+# ShopMock
 
-Runnable Docker/Podman realization of the design in
-[`ShopMock_Company_Infra.md`](ShopMock_Company_Infra.md). For the full
-rationale, service-to-image map, and seed-data plan, see
-[`INFRA_BUILD_SPEC.md`](INFRA_BUILD_SPEC.md).
+ShopMock is a deliberately attackable mock e-commerce company: a storefront,
+seller marketplace, three internal workforce applications, a FreeIPA control
+plane, and a SIEM, running as one container stack. It exists as a target for the
+capstone project "Autonomous AI-Driven Cyber Attacks", so several weaknesses in
+it are intentional and documented rather than fixed.
+
+Everything runs on Docker on a dev machine and on rootless Podman on the lab VM.
 
 ## Documentation map
 
 | Document | Purpose |
 | --- | --- |
-| [`ShopMock_Company_Infra.md`](ShopMock_Company_Infra.md) | Authoritative system and trust-boundary design |
-| [`INFRA_BUILD_SPEC.md`](INFRA_BUILD_SPEC.md) | Running service, datastore, network, and seed-data mapping |
-| [`DEPLOY.md`](DEPLOY.md) | Rootless-Podman VM deployment and recovery procedures |
-| [`PLAN_AUTH_CHECKOUT.md`](PLAN_AUTH_CHECKOUT.md) | Implemented customer authentication and checkout record |
-| [`PLAN_TIER0_FREEIPA.md`](PLAN_TIER0_FREEIPA.md) | Tier 0/PAW implementation and verified workforce federation |
-| [`PLAN_OE_DASHBOARD.md`](PLAN_OE_DASHBOARD.md) | IT-only live container-health dashboard and authorization design |
-| [`scripts/verify-workforce-portals.sh`](scripts/verify-workforce-portals.sh) | Offline Finance/HR isolation, identity, and topology verification |
+| [`ShopMock_Company_Infra.md`](ShopMock_Company_Infra.md) | Design artifact: assets, tier model, robustness analysis |
+| [`INFRA_BUILD_SPEC.md`](INFRA_BUILD_SPEC.md) | Design-to-runtime inventory: services, images, networks, seed data |
+| [`DEPLOY.md`](DEPLOY.md) | The operational guide: deploy, verify, troubleshoot |
+| [`DECISIONS.md`](DECISIONS.md) | Why the build looks the way it does, and what would change it |
+
+Offline repository checks live in `scripts/verify-identity-boundary.sh`,
+`scripts/verify-it-ops.sh`, and `scripts/verify-workforce-portals.sh`. They read
+files only and need no running stack.
+
+## Architecture and trust boundaries
+
+Traefik is the only ingress. Every HTTP surface is reached through it on one
+origin, so the browser never talks to a service directly.
+
+Two identity domains, deliberately separate:
+
+- `shopmock-ciam` (Keycloak) holds customers and sellers as native users.
+- `shopmock-workforce` (Keycloak) holds employees federated from FreeIPA over
+  LDAP. FreeIPA is the Tier 0 control plane: LDAP, Kerberos, PKI, and HBAC.
+
+A token issued in one realm is rejected by the other. Services check the exact
+issuer, the token type, the authorized party, and the required role server-side
+before touching a database.
+
+Tiers map to Docker networks on a dev machine. `tier0_net`, `tier1_net`,
+`tier2_net`, `data_net`, `soc_net`, `mgmt_net`, `ops_net`, and `hr_net` are all
+internal. A database attaches only to `data_net` and its owning service bridges
+`data_net` to a tier network, so no database is reachable from the edge. On the
+lab VM campus policy forces one flat `sandboxnet`, and Tier 0 is then enforced by
+identity instead: HBAC allows only `tier0-admins` to SSH to the DC and the PAW.
+`hr_net` and `ops_net` stay private on both targets.
+
+Three planes: FreeIPA is the control plane, the PAW is the access plane that
+administrators traverse upward, and the Keycloak admin console, Vault, and the
+IPA web UI are management surfaces that are never routed publicly.
+
+## Public endpoints
+
+All paths below are relative to the deployment origin — `http://localhost` on a
+dev machine, the campus URL on the VM. See [`DEPLOY.md`](DEPLOY.md) for the
+per-target bindings and the management ports, which are not public.
+
+| Path | Service | Notes |
+| --- | --- | --- |
+| `/` | storefront (Next.js) | shop UI; Seller Central at `/seller` |
+| `/auth` | Keycloak | CIAM login and self-registration; `/auth/admin` is blocked at the edge |
+| `/api/catalog` | catalog-svc (PostgREST) | anonymous product reads |
+| `/api/orders` | order-svc (PostgREST) | reads; `POST rpc/place_order` needs a customer token |
+| `/api/checkout` | checkout-svc (PostgREST) | finance scope; `POST rpc/record_payment` needs a customer token |
+| `/api/customers` | customer-svc (PostgREST) | RPC only — `rpc/ensure_customer`; tables are not browsable |
+| `/api/seller` | seller-svc (PostgREST) | read-only seller browse |
+| `/api/seller-backend` | seller-backend (Django) | seller write paths; seller token required |
+| `/api/internal` | internal-service-backend (Django) | checkout orchestration across customer, orders, finance |
+| `/api/ops` | internal-ops-svc (PostgREST) | internal feature flags |
+| `/oe` | oe-dashboard (Django) | container health and Wazuh alerts; `it-ops` role |
+| `/finance` | finance-portal (Django) | read-only ledger reporting; `finance` role |
+| `/hr` | hr-portal (Django) | read-only staff reporting; `hr` role |
+
+## Test identities
+
+Lab values only. Customer and seller accounts are native Keycloak users;
+workforce accounts live in FreeIPA and reach Keycloak through federation.
+
+| Identity | Realm | Password | Grants |
+| --- | --- | --- | --- |
+| `ada` | ciam | `Password123!` | customer: cart, checkout, order history |
+| `nwgadgets` | ciam | `Seller123!` | seller: Seller Central listings and sales |
+| `it.ops` | workforce | `IPA_IT_PASSWORD` | `it-ops` role, `/oe` only |
+| `finance.clerk` | workforce | `IPA_FINANCE_PASSWORD` | `finance` role, `/finance` only |
+| `hr.specialist` | workforce | `IPA_HR_PASSWORD` | `hr` role, `/hr` only |
+| `gadmin` | FreeIPA | `IPA_ADMIN_PASSWORD` | `tier0-admins`: SSH and sudo on the PAW and the DC |
+
+New customers can also self-register from the storefront header. A first login
+provisions a `commerce.customers` row through `ensure_customer()`, keyed on the
+Keycloak `sub`.
+
+The three job functions are peers, not a hierarchy: `gadmin` has no access to
+`/oe`, `/finance`, or `/hr`, and `finance.clerk` is denied Tier 0 SSH. Passwords
+come from `.env`; the FreeIPA bootstrap creates a user only if it is missing, so
+changing a variable does not rotate an identity that already exists. Use
+`ipa passwd <login>` on the DC for that.
 
 ## Quick start
 
 ```bash
-cp .env.example .env          # fake lab secrets
-bash scripts/deploy.sh         # builds, starts, waits, and applies idempotent bootstrap data
+cp .env.example .env     # fake lab secrets
+bash scripts/deploy.sh   # build, start, wait, and apply idempotent bootstrap data
 ```
 
-Deploying to the lab VM (rootless podman, campus URL) is different — see
+The script is idempotent and is the supported way to bring the stack up on both
+targets — it detects rootless Podman, applies the VM override, and reapplies the
+database roles, RPCs, realm objects, and FreeIPA bootstrap that only run once on
+fresh volumes. Full procedure, verification, and troubleshooting are in
 [`DEPLOY.md`](DEPLOY.md).
 
-Most components seed themselves during startup:
+## Current limitations
 
-- Postgres DBs run `seed/<db>/01_schema.sql` then `02_seed.sql` on first boot.
-- Keycloak imports `seed/identity/realm-shopmock.json` when its realm volume is new.
-- The one-shot `vault-seed` and `search-seed` containers wait for their services.
-- `scripts/deploy.sh` reapplies database roles/RPCs, Keycloak redirect origins, and
-  the idempotent FreeIPA users/groups/HBAC bootstrap on every deployment.
+Intentional weaknesses, kept as capstone targets:
 
-To reseed from scratch: `docker compose down -v && bash scripts/deploy.sh`.
-This destroys lab data and recreates all seed state; do not use it for routine updates.
+- `place_order` trusts the browser-supplied `customer_ref` and per-line unit
+  prices, so IDOR and price tampering are possible.
+- `place_order` and `record_payment` span two databases with no distributed
+  transaction, so a partial failure can leave an order without a payment row.
+- `BASTION_USER` is a static local break-glass account on the PAW that bypasses
+  HBAC.
+- All seed passwords, tokens, and card values are fake, and Vault runs in dev
+  mode. Card data is stored as opaque tokens plus last four digits only.
 
-## Endpoints
+Not built, and not claimed:
 
-| Service | URL | Notes |
-| --- | --- | --- |
-| Storefront (edge) | http://localhost/ | links to each API (HTTP port 80) |
-| Seller Central (UI) | http://localhost/seller | seller login, listings manager, sales dashboard |
-| Login / Sign-up (Keycloak) | http://localhost/auth/realms/shopmock-ciam/account | public CIAM login + self-registration, same-origin via the edge |
-| Catalog API | http://localhost/api/catalog/products | PostgREST |
-| Orders API | http://localhost/api/orders/orders | PostgREST; `POST /api/orders/rpc/place_order` (token) |
-| Checkout/Payment API | http://localhost/api/checkout/transactions | PostgREST (finance); `POST /api/checkout/rpc/record_payment` (token) |
-| Customer API | http://localhost/api/customers/rpc/ensure_customer | PostgREST (customer PII) — **RPC only**, tables not browsable |
-| Seller API (Tier 2) | http://localhost/api/seller/sellers | PostgREST (read-only browse) |
-| Seller Backend API (Tier 2) | http://localhost/api/seller-backend/listings | Django; seller token required (see below) |
-| Internal Ops API (Tier 2) | http://localhost/api/ops/feature_flags | PostgREST |
-| IT Operations dashboard | http://localhost/oe/ | IT-only live container health; Keycloak `it-operations` client + FreeIPA `it-ops` role |
-| Finance portal | http://localhost/finance/ | Read-only ledger reporting; dedicated `finance-portal` PKCE client + `finance` realm role |
-| People Operations portal | http://localhost/hr/ | Read-only isolated staff reporting; dedicated `hr-portal` PKCE client + `hr` realm role |
-| Traefik dashboard | http://localhost:8088 | lab only |
-| Identity admin (Keycloak) | http://localhost:8081 | CIAM admin console — mgmt-only; `/auth/admin` is blocked at the public edge |
-| FreeIPA Web UI (Tier 0) | https://localhost:8443 | control-plane DC admin — mgmt-only, reach via the PAW |
-| Search dashboard | http://localhost:5602 | OpenSearch Dashboards |
-| Vault | http://localhost:8200 | dev mode, token in `.env` |
-| PAW (SSH) | `ssh <BASTION_USER>@localhost` (port 22) | access plane — the path *up* to Tier 0; domain admins auth via Kerberos (HBAC), `BASTION_USER` is break-glass |
-
-## Customer login & checkout
-
-The storefront supports the full customer journey — **sign up / log in** (Keycloak
-OIDC, PKCE) and **check out a cart** (order + mock payment) — all same-origin
-through the edge. See [`PLAN_AUTH_CHECKOUT.md`](PLAN_AUTH_CHECKOUT.md) for the implementation record.
-
-- **Log in:** header → "Account & Lists". Redirects to Keycloak at `/auth`, back
-  to the storefront with a token.
-- **Sign up:** header → "New customer? Start here" (Keycloak self-registration is
-  enabled). A first login provisions a `commerce.customers` row automatically via
-  the `ensure_customer()` RPC — keyed on the user's Keycloak `sub`.
-- **Check out:** add to cart → `/cart` → `/checkout`. Anonymous users are prompted
-  to sign in. Placing an order calls, with the bearer token:
-  `ensure_customer()` → `place_order()` → `record_payment()`, then shows the order id.
-- **Order history:** header → "Returns & Orders" (`/orders`).
-
-How the write path is gated: PostgREST verifies the Keycloak RS256 token against a
-pinned public JWK (`PGRST_JWT_SECRET` in `.env`, matching the realm's signing key).
-Anonymous requests run as `web_anon` (read-only). The scalar database role is
-derived from explicit `storefront/customer` client-role membership. A database
-pre-request hook also requires the exact CIAM issuer, `typ=Bearer`,
-`azp=storefront`, and that membership. Customer PII is never browsable — `customer-svc` exposes only the
-`ensure_customer()` RPC, which returns just the caller's own id.
-
-> **Deliberate lab weakness (attack surface, not a bug):** the browser supplies the
-> `customer_ref` and per-line prices to `place_order`, so IDOR and price tampering
-> are possible by design — realistic targets for the capstone.
-
-Test logins (lab only): `ada` / `Password123!` (customer) and
-`nwgadgets` / `Seller123!` (seller). Customer and seller users are native
-Keycloak identities in `shopmock-ciam`. Workforce identities live in FreeIPA,
-are federated only into `shopmock-workforce`, and authenticate through dedicated clients:
-
-| Portal | Public URL | FreeIPA username | Password variable | Required realm role |
-| --- | --- | --- | --- | --- |
-| IT Operations | http://107.173.152.100:5002/oe/ | `it.ops` | `IPA_IT_PASSWORD` | `it-ops` |
-| Finance | http://107.173.152.100:5002/finance/ | `finance.clerk` | `IPA_FINANCE_PASSWORD` | `finance` |
-| People Operations | http://107.173.152.100:5002/hr/ | `hr.specialist` | `IPA_HR_PASSWORD` | `hr` |
-
-`gadmin` uses `$IPA_ADMIN_PASSWORD`. Workforce LDAP federation, attribute
-mapping, and group-to-role mapping are configured so each job-function identity
-receives only its corresponding application role. Changing a password variable
-does not rotate an existing FreeIPA user; use `ipa passwd <login>` for an
-already-created identity. Or register a fresh customer from the storefront.
-
-## Finance and People Operations portals
-
-Both workforce portals use authorization code flow with PKCE S256. Their public
-Keycloak clients have direct grants and service accounts disabled. The Django
-services verify the pinned RS256 realm key, an exact trusted issuer, the exact
-client `azp`, `typ=Bearer`, and the required realm role before making a database
-query. A same-named client role is not accepted.
-
-Finance connects only to `finance-db` as `finance_portal`. Its column grants omit
-payment tokens and customer references, and responses are built from explicit
-field allowlists. HR has a separate `hr-db`, private `hr_net`, `hr_portal` login,
-image, templates, and assets; it has no route or credential to a commerce or
-finance database. Both database roles default every transaction to read-only.
-
-Run the offline wiring checks with `bash scripts/verify-workforce-portals.sh`.
-Run each Django suite via its Docker `test` target; no running stack is needed.
-
-## Internal identity and privileged access
-
-FreeIPA is the authoritative workforce directory; Keycloak is the customer/seller
-CIAM workload. The systemd-based PAW enrolls as an IPA client and runs SSSD,
-oddjobd, and SSHD. FreeIPA is health-checked before the PAW starts, preventing the
-first-install race that previously left the PAW in break-glass-only mode.
-
-- `gadmin` means **Global Administrator**. It is a FreeIPA identity in
-  `tier0-admins`, not a local PAW account and not a customer/seller account.
-- `finance.clerk` is a workforce/help-desk identity and is intentionally denied
-  Tier 0 SSH access.
-- `BASTION_USER` is the local emergency account; it is not the normal admin path.
-- HBAC rule `tier0-access` allows `tier0-admins` to use `sshd` on
-  `ipa.shopmock.lab` and `paw.shopmock.lab`; FreeIPA's default `allow_all` is disabled.
-- A FreeIPA sudo rule exists for future controlled elevation, but the current HBAC
-  policy authorizes `sshd` only. Sudo remains denied until separately reviewed.
-
-Verified on the rootless-Podman VM (2026-08-22): FreeIPA healthy; PAW enrollment
-successful and persistent across restart; `gadmin` allowed by HBAC;
-`finance.clerk` denied; storefront, catalog, Keycloak, and seller health routes HTTP 200.
-
-## Seller backend (Tier 2)
-
-`seller-backend` is a Django service (like `internal-service-backend`) that owns
-all seller write paths. Data boundary: it connects **only** to catalog-db
-(`seller` + `catalog` schemas) and orders-db (read-only) — customer PII and
-finance data stay with `internal-service-backend`.
-
-Auth requires the exact CIAM issuer, a Bearer access token minted for
-`seller-dashboard`, and explicit `seller-dashboard/seller` membership. Ownership is always derived from
-the verified `sub` claim → the caller's `seller.sellers` row.
-
-Two login doors, two roles: customers sign in from the storefront header
-(`storefront` client and customer membership); sellers sign in at **Seller Central**
-(`http://localhost/seller`, `seller-dashboard` client and explicit seller membership).
-Both are isolated in `shopmock-ciam`; FreeIPA users exist only in the separate
-`shopmock-workforce` realm. Seller Central lets a seller add products
-(SKU, price, stock, category), edit or deactivate their listings, and see
-per-order sale lines with unit/gross totals. Try it with `nwgadgets` /
-`Seller123!`.
-
-| Endpoint | Method | What it does |
-| --- | --- | --- |
-| `/api/seller-backend/healthz` | GET | liveness, no auth |
-| `/api/seller-backend/sellers/ensure` | POST | idempotent seller provisioning keyed on Keycloak `sub` |
-| `/api/seller-backend/listings` | GET / POST | own listings; create product + inventory + listing atomically |
-| `/api/seller-backend/listings/<id>` | PATCH | update own `name`, `description`, `price_cents`, `active`, `qty` (commission is platform-set) |
-| `/api/seller-backend/sales` | GET | order lines for own SKUs from orders-db, with unit/gross totals |
-
-Smoke test (after a fresh `docker compose up`, realm import needs fresh volumes):
-
-```bash
-TOKEN=$(curl -s http://localhost/auth/realms/shopmock-ciam/protocol/openid-connect/token \
-  -d grant_type=password -d client_id=seller-dashboard \
-  -d username=nwgadgets -d password='Seller123!' | jq -r .access_token)
-curl -s -H "Authorization: Bearer $TOKEN" http://localhost/api/seller-backend/listings | jq
-```
-
-## Ports & exposure
-
-**Only one port should be public: `80` (the storefront/API edge — standard HTTP).**
-Everything else is either admin (reach via the PAW) or strictly internal.
-
-### Host-published ports (in `docker-compose.yml`)
-
-| Host port | → container:port | Service | Purpose | Expose to public? |
-| --- | --- | --- | --- | --- |
-| **80** | edge (traefik) :80 | Edge / reverse proxy | The single public ingress — storefront + all `/api/*` (HTTP) | ✅ **Yes** (the only one) |
-| 22 | paw :2222 | PAW (SSH) | Access plane — the only door up to Tier 0 (`tier0_net`) + `mgmt_net` | ⚠️ Restricted — IP-allowlist / VPN, never open-internet |
-| 8443 | ipa :443 | FreeIPA Web UI (Tier 0) | Control-plane DC administration | ❌ No — mgmt-only (via PAW) |
-| 8081 | identity (keycloak) :8080 | CIAM admin console | Realm/user/role administration | ❌ No — mgmt-only (via PAW) |
-| 8200 | vault :8200 | Secrets/Key mgmt | Vault API + UI | ❌ No — mgmt-only (via PAW) |
-| 8088 | edge (traefik) :8080 | Traefik dashboard | Routing introspection | ❌ No — lab debug only |
-| 5602 | search-dashboard :5601 | OpenSearch Dashboards | Search ops UI | ❌ No — mgmt-only |
-
-> The `❌`/`⚠️` ports are published to the host **only for lab convenience**.
-> To match the design (single public edge; Tier-0 reachable solely via the PAW),
-> delete the `ports:` entries for `ipa`, `identity`, `vault`, the traefik dashboard,
-> and `search-dashboard` — then reach them by SSH-tunnelling through the PAW. For
-> HTTPS, terminate TLS at the edge and publish **443** alongside (or instead of) port 80.
-
-### Internal-only ports (never published; reachable only on their Docker network)
-
-| Container:port | Service | Reachable from | Purpose |
-| --- | --- | --- | --- |
-| storefront :80 | Storefront (nginx) | edge_net (via traefik) | Static frontend |
-| `*-svc` :3000 | 5× PostgREST APIs | tier1_net / tier2_net (via traefik) | Catalog/Order/Checkout/Seller/Ops APIs |
-| search :9200 | OpenSearch | edge_net | Search index API |
-| identity :8080 | Keycloak | tier1_net | OIDC/SSO token issuance to services |
-| commerce `*-db` :5432 | 4× PostgreSQL | **data_net only** | Datastores — no route from the edge |
-| hr-db :5432 | PostgreSQL | **hr_net only** | Staff records — reachable only by hr-portal |
-| vault :8200 | Vault | soc_net | Secret reads by services |
-
-The databases bind to `data_net` (an `internal: true` network) and publish **no**
-host port, so there is no path to them from the public side — see below.
-
-## How segmentation is enforced
-
-Networks `tier0_net`, `tier1_net`, `tier2_net`, `data_net`, `hr_net`, `soc_net`, `mgmt_net` are
-`internal: true` (no internet, not bridged to the edge). A database attaches to
-`data_net` only; its owning service bridges `data_net` ↔ its tier network. The
-storefront/edge never touches `data_net`, so the DBs cannot be reached directly
-from the public side — matching design §6a. The **FreeIPA DC** sits on `tier0_net`,
-shared only with the **PAW**; on the flat-`sandboxnet` VM (where these networks
-collapse) Tier 0 is instead enforced by **FreeIPA HBAC** — only `tier0-admins` may
-SSH to the control-plane hosts.
-
-## Seed data → datastore
-
-| File | Datastore |
-| --- | --- |
-| `seed/customer-db/0*.sql` | Customer DB (PII) |
-| `seed/catalog-db/0*.sql` | Catalog DB (products, sellers, ops flags) |
-| `seed/orders-db/0*.sql` | Orders DB |
-| `seed/finance-db/0*.sql` | Financial/Wallet DB (PCI-scope, tokenized cards) |
-| `seed/hr-db/0*.sql` | Isolated synthetic People Operations DB |
-| `seed/identity/realm-shopmock.json` | Keycloak (identity store) |
-| `seed/vault/seed-secrets.sh` | Vault KV (`secret/shopmock/*`) |
-| `seed/search/index-catalog.sh` | OpenSearch index `catalog` |
-
-Test logins are listed under **Customer login & checkout** above.
-
-## Resource requirements (maximum)
-
-Size the host for the **worst case: the full stack with the SIEM on (default) and
-the log volume at its 20 GB cap.** These are the numbers to provision for.
-
-**Provision for the maximum: 16 GB RAM · 8 vCPU · 50 GB SSD.**
-
-Per-container working set at peak:
-
-| Container | Image | vCPU | RAM |
-| --- | --- | --- | --- |
-| `edge` (traefik) | traefik | 0.25 | 128 MB |
-| `storefront` (nginx) | nginx | 0.10 | 64 MB |
-| 5× `*-svc` (postgrest) | postgrest | 0.50 | 240 MB |
-| `identity` (keycloak) | keycloak | 0.50 | 1 GB |
-| `search` (opensearch) | opensearch | 1.00 | 2 GB |
-| `search-dashboard` | opensearch-dashboards | 0.25 | 768 MB |
-| 4× `*-db` (postgres) | postgres | 1.00 | 1 GB |
-| `vault` | vault | 0.10 | 128 MB |
-| `ipa` (freeipa) | freeipa-server | 0.50 | 2 GB |
-| `paw` (ipa-client) | almalinux+sshd | 0.10 | 128 MB |
-| `wazuh-manager` | wazuh-manager | 0.50 | 1 GB |
-| `wazuh-indexer` | wazuh-indexer | 1.00 | 2.5 GB |
-| `wazuh-dashboard` | wazuh-dashboard | 0.25 | 768 MB |
-| **Working-set total** | | **~6 vCPU** | **~11.5 GB** |
-| **Provision (≈30% headroom + Docker/OS)** | | **8 vCPU** | **20 GB** |
-
-Maximum storage (~50 GB SSD):
-
-| Item | Size |
-| --- | --- |
-| Container images (OpenSearch ×2 + Wazuh ×3 dominate) | ~7 GB |
-| **Log retention** — `wazuh-indexer` hot volume | **20 GB** |
-| Database volumes (seed <100 MB; headroom for order/txn growth) | ~10 GB |
-| Search index + Keycloak + OS/Docker overhead | ~6 GB |
-| Buffer | ~7 GB |
-
-> The 20 GB log cap buys roughly **2–3 weeks** of hot, searchable retention at this
-> lab's ingest (~1–2 GB/day). Higher ingest shrinks the window — that's the dial to
-> watch. Run **core only** (Wazuh removed from the compose file, logs shipped
-> elsewhere) and the box drops to **8 GB RAM · 4 vCPU · 25 GB**.
->
-> This is the all-in-one single-host figure. Production ShopMock (Tier-1 replication
-> + Tier-0 multi-VM per design §4.1) would be 3–4 nodes, ~48–64 GB RAM aggregate.
-
-## SIEM (on by default)
-
-The Wazuh 4.14.7 manager starts with the core stack — no profile flag needed.
-On the memory-constrained UWB VM, the Podman override also starts a matching
-containerized agent named `shopmock-podman-collector`. It reads the `shop`
-user's container logs through a networkless `wazuh-journal-relay` and performs
-targeted FIM against the read-only ShopMock checkout; it does not install
-anything on or claim full endpoint visibility into the Ubuntu host. The relay
-exists because Wazuh's embedded journal reader sees no records across the
-rootless user-journal namespace even when those files are mounted. The Podman
-socket is deliberately not mounted into either container.
-
-Running a second OpenSearch JVM for the dedicated Wazuh indexer would exceed
-the lab VM's memory budget. Filebeat therefore writes `wazuh-alerts-*` into the
-existing TLS-enabled `search` service on this deployment. This is a lab resource
-trade-off, not the recommended production topology: production should use a
-dedicated Wazuh indexer and dashboard with independently scoped credentials and
-retention. See the
-[Wazuh Docker docs](https://documentation.wazuh.com/current/deployment-options/docker/index.html).
-
-## All images (pullable)
-
-`traefik:v3.0` · `nginx:1.27-alpine` · `opensearchproject/opensearch:2.13.0` ·
-`opensearchproject/opensearch-dashboards:2.13.0` · `quay.io/keycloak/keycloak:24.0` ·
-`postgrest/postgrest:v12.2.0` · `postgres:16-alpine` · `hashicorp/vault:1.16` ·
-`curlimages/curl:8.7.1` · `lscr.io/linuxserver/openssh-server:latest` ·
-`wazuh/wazuh-manager:4.8.0`
+- No WAF. The design names OWASP ModSecurity CRS at the edge; no such service is
+  deployed.
+- No dedicated Wazuh indexer or dashboard. A second OpenSearch JVM does not fit
+  the VM, so Filebeat writes `wazuh-alerts-*` into the existing `search` service
+  and the alerts are read from `/oe`.
+- No host-level endpoint agent. The VM runs a container-only Wazuh collector, so
+  host audit, kernel, package, and active-response coverage is absent.
+- No per-host log shipping layer, no detection or incident-response runbook, and
+  no replication or multi-region resilience. This is a single-host lab.
+- Business logic is thin by design: PostgREST fronts most data, and Django owns
+  only the cross-database checkout and seller write boundaries.

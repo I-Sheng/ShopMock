@@ -6,7 +6,7 @@ I-Sheng Lee | Capstone: Autonomous AI-Driven Cyber Attacks
 
 *June 2026 | Updated August 2026 | University of Washington*
 
-# **1. Assets (Crown Jewels)**
+# **1. Assets (crown jewels)**
 
 The following assets represent the highest-value targets within the
 ShopMock infrastructure, ordered by business impact and sensitivity. The
@@ -23,7 +23,7 @@ all other assets.
 | **Catalog & Pricing Data**           | Product listings, pricing engine, inventory levels. Competitive and operational sensitivity.                   |
 | **Recommendation / Behavioral Data** | Browsing, search, and purchase signals. Behavioral profiling data with privacy implications.                   |
 
-# **2. Business Systems**
+# **2. Business systems**
 
 Each system below is a candidate for a dedicated service container in
 the deployment model.
@@ -40,13 +40,13 @@ the deployment model.
 | **Order Fulfillment**             | Warehouse, logistics, shipping, tracking.                |
 | **Customer Support**              | Tickets, returns, refunds.                               |
 
-# **3. Tier Model (by Access / Business Impact)**
+# **3. Tier model (by access / business impact)**
 
 Systems are classified into tiers based on blast radius — the scope of
 damage if that system is compromised. Tier 0 is the highest-value and
 hardest-to-reach; Tier 2 is the most exposed but lowest-impact.
 
-## **3.1 Two Identity Domains**
+## **3.1 Two identity domains**
 
 ShopMock deliberately separates public marketplace identities from internal
 workforce identities:
@@ -102,14 +102,14 @@ help-desk, server-administration, and Tier 0 identity-administration groups.
 </tbody>
 </table>
 
-# **4. Network Deployment Model**
+# **4. Network deployment model**
 
 ShopMock uses a multi-container deployment by default: each system from
 Section 2 runs as its own container rather than being bundled onto
 shared machines. This ensures failures and access remain isolated per
 service.
 
-## **4.1 Tier-to-Container Mapping**
+## **4.1 Tier-to-container mapping**
 
 | **Tier**                             | **Container Deployment Strategy**                                                                                                                                             |
 | ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -118,7 +118,7 @@ service.
 | **Tier 2 — Line-of-Business**        | Seller dashboards and regional support tooling run as containers in a separate segment, scaled per region/seller so one tenant's issue cannot reach others.                   |
 | **Shared Data Stores**               | Order, catalog, and customer DBs sit behind their owning service containers and are only reachable from those services — never directly from the frontend.                    |
 
-## **4.2 Multi-VM vs. Multi-Container**
+## **4.2 Multi-VM vs. multi-container**
 
 | **Dimension**    | **Multi-Container (Default)**                                     | **Multi-VM (Fallback for Tier 0/1)**                                 |
 | ---------------- | ----------------------------------------------------------------- | -------------------------------------------------------------------- |
@@ -136,7 +136,7 @@ service.
 </tbody>
 </table>
 
-# **5. Network Distribution Diagram**
+# **5. Network distribution diagram**
 
 The diagram below illustrates how containers are distributed across
 network segments. Each segment is accessible only through defined
@@ -149,30 +149,19 @@ External traffic enters through the DMZ/edge and reaches Tier 2 or Tier 1 APIs;
 shared databases remain behind their owning services. Administrators reach the
 FreeIPA Tier 0 control plane through the PAW. Management surfaces such as Keycloak
 admin, Vault, and the IPA Web UI use the management path. Keycloak remains the
-customer/seller CIAM workload; workforce federation from FreeIPA is configured but
-not yet accepted as complete.
+customer/seller CIAM workload and carries workforce tokens federated from the
+FreeIPA directory, which stays the sole Tier 0 authority for workforce identity.
 
-## **5.1 Verified Privileged-Access Path (August 2026)**
+Runtime verification of the privileged-access path is out of scope for this design
+artifact; see [DEPLOY.md](./DEPLOY.md) for the verification procedure.
 
-The implemented PAW runs systemd and supervises SSSD, oddjobd, and SSHD. Compose
-starts it only after FreeIPA passes a health check covering IPA service status and
-CA-certificate availability. FreeIPA's default `allow_all` HBAC rule is disabled.
-The explicit `tier0-access` rule targets `ipa.shopmock.lab` and
-`paw.shopmock.lab` for the `sshd` service: `gadmin` is allowed and
-`finance.clerk` is denied. Enrollment and identity resolution persist across a
-PAW restart. The local `BASTION_USER` remains a break-glass path only.
-
-Keycloak-to-FreeIPA workforce federation is a separate, incomplete integration:
-LDAP connectivity and DN discovery work, but explicit user/group mapper repair is
-still required. This does not affect native customer or seller authentication.
-
-# **6. Robustness Analysis**
+# **6. Robustness analysis**
 
 This section assesses the strength of the ShopMock design, the
 assumptions it depends on, and how sensitive the security posture is to
 those assumptions failing.
 
-## **6a. What Makes This Design Robust**
+## **6a. What makes this design robust**
 
   - **Per-service isolation:** One service = one container. A compromise
     or failure is contained to that service rather than the whole host.
@@ -189,7 +178,7 @@ those assumptions failing.
     through a controlled path, shrinking the attack surface for the
     highest-value target.
 
-## **6b. Assumptions the Design Relies On**
+## **6b. Assumptions the design relies on**
 
   - **Shared host kernel:** Container isolation assumes no kernel
     escape. If the kernel/orchestrator is vulnerable, per-service
@@ -211,7 +200,7 @@ those assumptions failing.
     kingdom, the whole tier model depends on it not being bypassed
     (token theft, SSO misconfiguration).
 
-## **6c. Failure Modes and Sensitivity**
+## **6c. Failure modes and sensitivity**
 
 <table>
 <tbody>
@@ -236,7 +225,7 @@ enforcement, a hardened orchestrator, and strong identity. Where those
 cannot be guaranteed (payment/identity), fall back to VM-level
 isolation.
 
-## **6d. Comparison to a Real Large Retailer (e.g. Amazon)**
+## **6d. Comparison to a real large retailer (e.g. Amazon)**
 
 | **Property**                           | **ShopMock**                                                                      | **Large Retailer (e.g. Amazon) — Source**                                                                                                                                                        |
 | -------------------------------------- | --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -245,7 +234,7 @@ isolation.
 | **Blast-radius containment**           | Tier 0/1/2 segmentation; Tier 2 cannot reach Tier 0/1                             | Blast-radius containment via least-privilege IAM and per-service isolation is a documented AWS and cloud-security practice; limiting identity permissions limits what attackers can reach. \[8\] |
 | **Data-behind-services**               | DBs reachable only through their owning service, never directly from the web tier | AWS Prescriptive Guidance: 'Individual data stores cannot be directly accessed by other microservices — persistent data is accessed only by APIs.' \[9\]                                         |
 | **Horizontal scaling**                 | Container replication per tier without changing security boundaries               | Large e-commerce platforms use microservice-level horizontal scaling to handle Black Friday surges without changing security boundaries, fine-grained per-service. \[10\]                        |
-| **Operational layers (honest caveat)** | Wazuh manager is present; full SIEM storage/dashboard, 24/7 operations, IR, and DDoS controls are not implemented | Large retailers operate continuous SOC, detection, IR, threat intelligence, red teams, hardware roots of trust, and edge DDoS controls. |
+| **Operational layers (honest caveat)** | Wazuh manager and container collector feed shared OpenSearch, with alerts visible in `/oe`; there is no dedicated Wazuh indexer/dashboard, 24/7 SOC, IR program, or DDoS control | Large retailers operate continuous SOC, detection, IR, threat intelligence, red teams, hardware roots of trust, and edge DDoS controls. |
 
 <table>
 <tbody>
