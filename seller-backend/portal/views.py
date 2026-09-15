@@ -33,7 +33,7 @@ def _auth(request):
     try:
         return require_seller(request), None
     except AuthError as exc:
-        return None, _bad(str(exc), status=401)
+        return None, _bad(str(exc), status=exc.status)
 
 
 def _seller_id(sub):

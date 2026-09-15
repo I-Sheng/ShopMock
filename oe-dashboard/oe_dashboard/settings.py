@@ -62,7 +62,7 @@ X_FRAME_OPTIONS = 'DENY'
 # fails closed.
 OE_JWT_JWK = os.environ.get('PGRST_JWT_SECRET', '')
 
-OE_OIDC_REALM = os.environ.get('OE_OIDC_REALM', 'shopmock')
+OE_OIDC_REALM = os.environ.get('OE_OIDC_REALM', 'shopmock-workforce')
 # A dedicated browser client — never the storefront's or Seller Central's. A
 # token minted for another client is rejected even if it carries the role.
 OE_OIDC_CLIENT_ID = os.environ.get('OE_OIDC_CLIENT_ID', 'it-operations')

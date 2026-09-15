@@ -44,7 +44,7 @@ This destroys lab data and recreates all seed state; do not use it for routine u
 | --- | --- | --- |
 | Storefront (edge) | http://localhost/ | links to each API (HTTP port 80) |
 | Seller Central (UI) | http://localhost/seller | seller login, listings manager, sales dashboard |
-| Login / Sign-up (Keycloak) | http://localhost/auth/realms/shopmock/account | public OIDC login + self-registration, same-origin via the edge |
+| Login / Sign-up (Keycloak) | http://localhost/auth/realms/shopmock-ciam/account | public CIAM login + self-registration, same-origin via the edge |
 | Catalog API | http://localhost/api/catalog/products | PostgREST |
 | Orders API | http://localhost/api/orders/orders | PostgREST; `POST /api/orders/rpc/place_order` (token) |
 | Checkout/Payment API | http://localhost/api/checkout/transactions | PostgREST (finance); `POST /api/checkout/rpc/record_payment` (token) |
@@ -80,9 +80,10 @@ through the edge. See [`PLAN_AUTH_CHECKOUT.md`](PLAN_AUTH_CHECKOUT.md) for the i
 
 How the write path is gated: PostgREST verifies the Keycloak RS256 token against a
 pinned public JWK (`PGRST_JWT_SECRET` in `.env`, matching the realm's signing key).
-Anonymous requests run as `web_anon` (read-only); a valid token's `role: customer`
-claim upgrades the request to the `customer` DB role, which may run the checkout
-RPCs. Customer PII is never browsable — `customer-svc` exposes only the
+Anonymous requests run as `web_anon` (read-only). The scalar database role is
+derived from explicit `storefront/customer` client-role membership. A database
+pre-request hook also requires the exact CIAM issuer, `typ=Bearer`,
+`azp=storefront`, and that membership. Customer PII is never browsable — `customer-svc` exposes only the
 `ensure_customer()` RPC, which returns just the caller's own id.
 
 > **Deliberate lab weakness (attack surface, not a bug):** the browser supplies the
@@ -91,8 +92,8 @@ RPCs. Customer PII is never browsable — `customer-svc` exposes only the
 
 Test logins (lab only): `ada` / `Password123!` (customer) and
 `nwgadgets` / `Seller123!` (seller). Customer and seller users are native
-Keycloak identities. Workforce identities live in FreeIPA and authenticate
-through dedicated Keycloak clients:
+Keycloak identities in `shopmock-ciam`. Workforce identities live in FreeIPA,
+are federated only into `shopmock-workforce`, and authenticate through dedicated clients:
 
 | Portal | Public URL | FreeIPA username | Password variable | Required realm role |
 | --- | --- | --- | --- | --- |
@@ -151,15 +152,15 @@ all seller write paths. Data boundary: it connects **only** to catalog-db
 (`seller` + `catalog` schemas) and orders-db (read-only) — customer PII and
 finance data stay with `internal-service-backend`.
 
-Auth: a token from the `seller-dashboard` client (which stamps `role: seller`)
-verified against the same pinned realm JWK. Ownership is always derived from
+Auth requires the exact CIAM issuer, a Bearer access token minted for
+`seller-dashboard`, and explicit `seller-dashboard/seller` membership. Ownership is always derived from
 the verified `sub` claim → the caller's `seller.sellers` row.
 
 Two login doors, two roles: customers sign in from the storefront header
-(`storefront` client → `role: customer`); sellers sign in at **Seller Central**
-(`http://localhost/seller`, `seller-dashboard` client → `role: seller`). Same
-Keycloak realm behind both — only the client (and therefore the stamped role
-claim and landing page) differs. Seller Central lets a seller add products
+(`storefront` client and customer membership); sellers sign in at **Seller Central**
+(`http://localhost/seller`, `seller-dashboard` client and explicit seller membership).
+Both are isolated in `shopmock-ciam`; FreeIPA users exist only in the separate
+`shopmock-workforce` realm. Seller Central lets a seller add products
 (SKU, price, stock, category), edit or deactivate their listings, and see
 per-order sale lines with unit/gross totals. Try it with `nwgadgets` /
 `Seller123!`.
@@ -175,7 +176,7 @@ per-order sale lines with unit/gross totals. Try it with `nwgadgets` /
 Smoke test (after a fresh `docker compose up`, realm import needs fresh volumes):
 
 ```bash
-TOKEN=$(curl -s http://localhost/auth/realms/shopmock/protocol/openid-connect/token \
+TOKEN=$(curl -s http://localhost/auth/realms/shopmock-ciam/protocol/openid-connect/token \
   -d grant_type=password -d client_id=seller-dashboard \
   -d username=nwgadgets -d password='Seller123!' | jq -r .access_token)
 curl -s -H "Authorization: Bearer $TOKEN" http://localhost/api/seller-backend/listings | jq

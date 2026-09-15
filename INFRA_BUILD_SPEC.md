@@ -164,7 +164,7 @@ import on startup or a one-shot job.
 | 6 | Orders, line items, shipments | `seed/orders-db/02_seed.sql` | **Orders DB** | initdb |
 | 7 | Finance schema (PCI scope) | `seed/finance-db/01_schema.sql` | **Financial/Wallet DB** (db `finance`) | initdb |
 | 8 | Wallets, tokenized cards, transactions, revenue | `seed/finance-db/02_seed.sql` | **Financial/Wallet DB** | initdb |
-| 9 | Realm, clients, roles, **customer/seller users** + LDAP federation to FreeIPA | `seed/identity/realm-shopmock.json` | **CIAM store** (Keycloak) | `--import-realm` on start |
+| 9 | Separate native CIAM and FreeIPA-federated workforce realms; retired mixed realm disabled | `seed/identity/realm-shopmock-*.json` | **Keycloak** | startup import plus deploy reconciliation |
 | 9b | **Tier-0 groups (tier0/server-admins/helpdesk), employees (gadmin, finance.clerk), HBAC + sudo rules** | `seed/ipa/bootstrap.sh` | **FreeIPA DC** (Tier 0) | run inside the DC by `deploy.sh` after install |
 | 10 | Secrets: DB creds, payment-gateway key, JWT signing key | `seed/vault/seed-secrets.sh` | **Vault** KV (`secret/shopmock/*`) | one-shot job after Vault unseals |
 | 11 | Search index documents (catalog mirror) | `seed/search/index-catalog.sh` | **OpenSearch** index `catalog` | one-shot bulk job |
@@ -177,8 +177,9 @@ import on startup or a one-shot job.
 > **Login / checkout (added):** the storefront now does real Keycloak OIDC login
 > and self-registration (realm has `registrationAllowed: true`, reached same-origin
 > at `/auth` through the edge). Write endpoints verify the realm's RS256 token
-> against a pinned public JWK (`PGRST_JWT_SECRET`); the token's `role: customer`
-> claim maps to the `customer` DB role. See `PLAN_AUTH_CHECKOUT.md` and the README
+> against a pinned public JWK (`PGRST_JWT_SECRET`); the database role is derived
+> from explicit client-role membership and checked by a database pre-request hook.
+> See `PLAN_AUTH_CHECKOUT.md` and the README
 > "Customer login & checkout" section.
 
 **Data ownership / dependency order** (must seed in this order on a clean volume):

@@ -11,7 +11,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-REALM=seed/identity/realm-shopmock.json
+REALM=seed/identity/realm-shopmock-workforce.json
 IPA=seed/ipa/bootstrap.sh
 BASE=docker-compose.yml
 VM=docker-compose.vm.yml

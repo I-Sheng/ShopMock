@@ -24,7 +24,7 @@ export function AuthProvider({ children }) {
     }
     const kc = new Keycloak({
       url: `${window.location.origin}/auth`,
-      realm: 'shopmock',
+      realm: 'shopmock-ciam',
       clientId: 'storefront',
     });
     kcRef.current = kc;

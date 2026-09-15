@@ -128,7 +128,7 @@ curl -s http://127.0.0.1:5002/ | head  # storefront through the edge
 curl -s http://127.0.0.1:5002/api/catalog/products | head -c 200
 
 # seller login round-trip (token carries role: seller)
-TOKEN=$(curl -s http://127.0.0.1:5002/auth/realms/shopmock/protocol/openid-connect/token \
+TOKEN=$(curl -s http://127.0.0.1:5002/auth/realms/shopmock-ciam/protocol/openid-connect/token \
   -d grant_type=password -d client_id=seller-dashboard \
   -d username=nwgadgets -d password='Seller123!' | jq -r .access_token)
 curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:5002/api/seller-backend/listings | jq
@@ -156,6 +156,19 @@ mappers still need repair. Native customer and seller authentication remains val
 
 Browser: `http://shopmock.uwb.edu/isheng07/` (storefront) and
 `…/isheng07/seller` (Seller Central). FreeIPA Web UI: tunnel `:8443` through the PAW.
+
+Identity migration caveat: deploy now imports/converges `shopmock-ciam` and
+`shopmock-workforce` into an existing Keycloak volume and disables (but does
+not delete) the retired `shopmock` realm. Existing sessions against the retired
+issuer stop working immediately. Native accounts are seeded into CIAM; any
+password/profile changes made only in the retired realm must be migrated or
+reset deliberately after review. FreeIPA users remain in FreeIPA and appear
+only through the workforce realm.
+
+Database settings caveat: deploy reapplies `07_token_boundary.sql`, sets the
+exact CIAM issuer with `ALTER DATABASE`, and force-recreates the three protected
+PostgREST services. This recreation is required because existing pooled
+PostgreSQL sessions do not inherit a newly changed database setting.
 
 Seed data caveat: Keycloak realm and DB schema files import **only on fresh
 volumes**. After changing anything under `seed/`, reseed with

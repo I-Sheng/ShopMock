@@ -137,6 +137,11 @@ echo "deploy: applying RPC functions..."
 "${COMPOSE[@]}" exec -T orders-db   psql -v ON_ERROR_STOP=1 -U postgres -d orders   -f /docker-entrypoint-initdb.d/04_rpc.sql
 "${COMPOSE[@]}" exec -T finance-db  psql -v ON_ERROR_STOP=1 -U postgres -d finance  -f /docker-entrypoint-initdb.d/04_rpc.sql
 
+echo "deploy: applying PostgREST token boundary hooks..."
+"${COMPOSE[@]}" exec -T customer-db psql -v ON_ERROR_STOP=1 -U postgres -d customer -f /docker-entrypoint-initdb.d/07_token_boundary.sql
+"${COMPOSE[@]}" exec -T orders-db   psql -v ON_ERROR_STOP=1 -U postgres -d orders   -f /docker-entrypoint-initdb.d/07_token_boundary.sql
+"${COMPOSE[@]}" exec -T finance-db  psql -v ON_ERROR_STOP=1 -U postgres -d finance  -f /docker-entrypoint-initdb.d/07_token_boundary.sql
+
 echo "deploy: ensuring internal_backend role..."
 pw=$(grep '^INTERNAL_BACKEND_DB_PASSWORD=' .env | cut -d= -f2-)
 for db in customer-db orders-db finance-db; do
@@ -187,6 +192,20 @@ if [[ ! "$public_origin" =~ ^https?://(\[[0-9A-Fa-f:]+\]|[A-Za-z0-9.-]+)(:[0-9]{
   exit 1
 fi
 
+# ALTER DATABASE settings are inherited only by new PostgreSQL sessions. Set
+# the exact trusted issuer, then recreate PostgREST so no pooled connection can
+# retain the retired value.
+ciam_issuer="$public_origin/auth/realms/shopmock-ciam"
+for spec in 'customer-db customer' 'orders-db orders' 'finance-db finance'; do
+  read -r service database <<<"$spec"
+  # psql does not expand :variables inside a -c argument. PUBLIC_ORIGIN was
+  # strictly validated above, so embedding the derived issuer as a SQL literal
+  # is safe and works in both PostgreSQL and the compose exec wrapper.
+  "${COMPOSE[@]}" exec -T "$service" psql -v ON_ERROR_STOP=1 -U postgres -d "$database" \
+    -c "ALTER DATABASE \"$database\" SET app.ciam_issuer TO '$ciam_issuer';"
+done
+"${COMPOSE[@]}" up -d --no-deps --force-recreate customer-svc order-svc checkout-svc
+
 echo "deploy: waiting for Keycloak before applying PUBLIC_ORIGIN=$public_origin..."
 kcadm=/opt/keycloak/bin/kcadm.sh
 kcadm_config=/tmp/shopmock-kcadm.config
@@ -218,11 +237,29 @@ if [ -z "$keycloak_ready" ]; then
   exit 1
 fi
 
-# Every kcadm call below targets the shopmock realm with the session config.
+# Import replacement realms into existing Keycloak volumes (startup import is
+# create-only), then retire the mixed realm without deleting its persistent data.
+for realm in shopmock-ciam shopmock-workforce; do
+  if ! "${COMPOSE[@]}" exec -T identity "$kcadm" get "realms/$realm" \
+       --config "$kcadm_config" >/dev/null 2>&1; then
+    "${COMPOSE[@]}" exec -T identity "$kcadm" create realms \
+      --config "$kcadm_config" -f "/opt/keycloak/data/import/realm-$realm.json" >/dev/null
+    echo "deploy: created Keycloak realm '$realm'"
+  fi
+done
+if "${COMPOSE[@]}" exec -T identity "$kcadm" get realms/shopmock \
+     --config "$kcadm_config" >/dev/null 2>&1; then
+  "${COMPOSE[@]}" exec -T identity "$kcadm" update realms/shopmock \
+    --config "$kcadm_config" -s enabled=false -s registrationAllowed=false >/dev/null
+  echo "deploy: disabled retired mixed realm 'shopmock' (data retained)"
+fi
+
+# kcadm helpers target the selected logical realm.
+KC_REALM=shopmock-workforce
 kc() {   # kc <verb> <endpoint> [args...]
   local verb="$1" endpoint="$2"; shift 2
   "${COMPOSE[@]}" exec -T identity "$kcadm" "$verb" "$endpoint" \
-    --config "$kcadm_config" -r shopmock "$@"
+    --config "$kcadm_config" -r "$KC_REALM" "$@"
 }
 
 client_uuid_of() {
@@ -341,6 +378,10 @@ else
 fi
 
 for client in storefront seller-dashboard it-operations finance-portal hr-portal; do
+  case "$client" in
+    storefront|seller-dashboard) KC_REALM=shopmock-ciam ;;
+    *) KC_REALM=shopmock-workforce ;;
+  esac
   client_uuid=$(client_uuid_of "$client")
   if [[ ! "$client_uuid" =~ ^[0-9a-fA-F-]{36}$ ]]; then
     echo "deploy: ERROR: invalid UUID for Keycloak client '$client' (got '$client_uuid')" >&2
@@ -423,7 +464,7 @@ else
          --server http://127.0.0.1:8080/auth --realm master \
          --user "$KEYCLOAK_ADMIN" --password "$KEYCLOAK_ADMIN_PASSWORD"' >/dev/null
     ldap_id=$("${COMPOSE[@]}" exec -T identity "$kcadm" get components \
-      --config "$kcadm_config" -r shopmock | jq -r \
+      --config "$kcadm_config" -r shopmock-workforce | jq -r \
       '.[] | select(.providerId == "ldap" and .name == "freeipa") | .id')
     if [[ ! "$ldap_id" =~ ^[0-9a-fA-F-]{36}$ ]]; then
       echo "deploy: ERROR: could not identify the Keycloak freeipa LDAP component" >&2
@@ -431,7 +472,7 @@ else
     fi
     bind_dn="uid=keycloak-federation,cn=sysaccounts,cn=etc,dc=${ipa_domain//./,dc=}"
     "${COMPOSE[@]}" exec -T identity "$kcadm" update "components/$ldap_id" \
-      --config "$kcadm_config" -r shopmock \
+      --config "$kcadm_config" -r shopmock-workforce \
       -s "config.bindDn=[\"$bind_dn\"]" \
       -s "config.bindCredential=[\"$ipa_bind_pw\"]" >/dev/null
 
@@ -439,7 +480,7 @@ else
     # same-file realm groups exist. The seed therefore omits this one property;
     # set it after the realm and /workforce group have been imported.
     group_mapper_id=$("${COMPOSE[@]}" exec -T identity "$kcadm" get components \
-      --config "$kcadm_config" -r shopmock | jq -r \
+      --config "$kcadm_config" -r shopmock-workforce | jq -r \
       '.[] | select(.providerId == "group-ldap-mapper" and .name == "freeipa groups") | .id')
     if [[ ! "$group_mapper_id" =~ ^[0-9a-fA-F-]{36}$ ]]; then
       echo "deploy: ERROR: could not identify the Keycloak FreeIPA group mapper" >&2
@@ -448,7 +489,7 @@ else
     # groups.ldap.filter is re-asserted here too: a stack that federated before
     # it-ops existed would otherwise never import the new group.
     "${COMPOSE[@]}" exec -T identity "$kcadm" update "components/$group_mapper_id" \
-      --config "$kcadm_config" -r shopmock \
+      --config "$kcadm_config" -r shopmock-workforce \
       -s 'config."groups.path"=["/workforce"]' \
       -s 'config."groups.ldap.filter"=["(|(cn=employees)(cn=tier0-admins)(cn=server-admins)(cn=helpdesk)(cn=it-ops)(cn=finance)(cn=hr))"]' >/dev/null
     cleanup_kcadm

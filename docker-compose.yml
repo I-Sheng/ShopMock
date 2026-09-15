@@ -126,6 +126,8 @@ services:
       PGRST_DB_ANON_ROLE: web_anon
       PGRST_JWT_SECRET: ${PGRST_JWT_SECRET}   # verify Keycloak RS256 tokens
       PGRST_JWT_ROLE_CLAIM_KEY: .role         # token's `role` claim -> DB role
+      PGRST_DB_PRE_REQUEST: security.check_ciam_customer
+      CIAM_ISSUER: ${PUBLIC_ORIGIN:-http://localhost}/auth/realms/shopmock-ciam
     networks: [tier1_net, data_net]
     depends_on: [orders-db]
     labels:
@@ -144,6 +146,8 @@ services:
       PGRST_DB_ANON_ROLE: web_anon
       PGRST_JWT_SECRET: ${PGRST_JWT_SECRET}   # verify Keycloak RS256 tokens
       PGRST_JWT_ROLE_CLAIM_KEY: .role         # token's `role` claim -> DB role
+      PGRST_DB_PRE_REQUEST: security.check_ciam_customer
+      CIAM_ISSUER: ${PUBLIC_ORIGIN:-http://localhost}/auth/realms/shopmock-ciam
     networks: [tier1_net, data_net]
     depends_on: [finance-db]
     labels:
@@ -162,6 +166,8 @@ services:
       PGRST_DB_ANON_ROLE: web_anon
       PGRST_JWT_SECRET: ${PGRST_JWT_SECRET}   # verify Keycloak RS256 tokens
       PGRST_JWT_ROLE_CLAIM_KEY: .role         # token's `role` claim -> DB role
+      PGRST_DB_PRE_REQUEST: security.check_ciam_customer
+      CIAM_ISSUER: ${PUBLIC_ORIGIN:-http://localhost}/auth/realms/shopmock-ciam
     networks: [tier1_net, data_net]
     depends_on: [customer-db]
     labels:
@@ -212,6 +218,7 @@ services:
       DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY}
       INTERNAL_BACKEND_DB_PASSWORD: ${INTERNAL_BACKEND_DB_PASSWORD}
       PGRST_JWT_SECRET: ${PGRST_JWT_SECRET}   # same pinned realm JWK as PostgREST
+      CIAM_ISSUER: ${PUBLIC_ORIGIN:-http://localhost}/auth/realms/shopmock-ciam
     networks: [tier2_net, data_net]
     depends_on: [customer-db, orders-db, finance-db]
     labels:
@@ -229,6 +236,7 @@ services:
       DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY}
       SELLER_BACKEND_DB_PASSWORD: ${SELLER_BACKEND_DB_PASSWORD}
       PGRST_JWT_SECRET: ${PGRST_JWT_SECRET}   # same pinned realm JWK as PostgREST
+      CIAM_ISSUER: ${PUBLIC_ORIGIN:-http://localhost}/auth/realms/shopmock-ciam
     networks: [tier2_net, data_net]
     depends_on: [catalog-db, orders-db]
     labels:

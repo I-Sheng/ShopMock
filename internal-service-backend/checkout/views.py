@@ -192,7 +192,7 @@ def checkout(request):
     try:
         claims = require_customer(request)
     except AuthError as exc:
-        return _bad(str(exc), status=401)
+        return _bad(str(exc), status=exc.status)
 
     try:
         body = json.loads(request.body or b'{}')

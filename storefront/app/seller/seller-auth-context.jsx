@@ -4,8 +4,8 @@ import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import Keycloak from 'keycloak-js';
 
 // Seller Central signs in through the `seller-dashboard` Keycloak client, which
-// stamps `role: seller` into the token — the customer storefront uses the
-// `storefront` client (`role: customer`). Same realm, same edge-routed /auth,
+// derives `role: seller` from explicit seller client-role membership. The
+// storefront derives `role: customer` from membership in the CIAM realm.
 // different client and different landing page. The customer AuthProvider skips
 // initialization under /seller so this instance owns the OIDC callback here.
 const SellerAuthContext = createContext(null);
@@ -20,7 +20,7 @@ export function SellerAuthProvider({ children }) {
     if (kcRef.current) return; // guard StrictMode double-invoke
     const kc = new Keycloak({
       url: `${window.location.origin}/auth`,
-      realm: 'shopmock',
+      realm: 'shopmock-ciam',
       clientId: 'seller-dashboard',
     });
     kcRef.current = kc;

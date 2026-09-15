@@ -75,7 +75,7 @@ DATABASES = {
 # self-checks without credentials; a request that needs it fails closed.
 HR_JWT_JWK = os.environ.get('PGRST_JWT_SECRET', '')
 
-HR_OIDC_REALM = os.environ.get('HR_OIDC_REALM', 'shopmock')
+HR_OIDC_REALM = os.environ.get('HR_OIDC_REALM', 'shopmock-workforce')
 # A dedicated browser client — never the storefront's, Seller Central's, the IT
 # console's or the Finance portal's.
 HR_OIDC_CLIENT_ID = os.environ.get('HR_OIDC_CLIENT_ID', 'hr-portal')

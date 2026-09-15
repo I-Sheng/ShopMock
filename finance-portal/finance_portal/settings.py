@@ -76,7 +76,7 @@ DATABASES = {
 # fails closed.
 FINANCE_JWT_JWK = os.environ.get('PGRST_JWT_SECRET', '')
 
-FINANCE_OIDC_REALM = os.environ.get('FINANCE_OIDC_REALM', 'shopmock')
+FINANCE_OIDC_REALM = os.environ.get('FINANCE_OIDC_REALM', 'shopmock-workforce')
 # A dedicated browser client — never the storefront's, Seller Central's, the IT
 # console's or the HR portal's. A token minted for another client is rejected
 # even if it carries the finance role.
