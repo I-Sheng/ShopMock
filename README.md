@@ -293,11 +293,23 @@ Maximum storage (~50 GB SSD):
 
 ## SIEM (on by default)
 
-The Wazuh manager starts with the core stack — no profile flag needed. Only
-the manager runs by default; the full single-node bundle (indexer + dashboard)
-needs a one-time certificate bootstrap (see the
-[Wazuh Docker docs](https://documentation.wazuh.com/current/deployment-options/docker/index.html))
-before it can be added.
+The Wazuh 4.14.7 manager starts with the core stack — no profile flag needed.
+On the memory-constrained UWB VM, the Podman override also starts a matching
+containerized agent named `shopmock-podman-collector`. It reads the `shop`
+user's container logs through a networkless `wazuh-journal-relay` and performs
+targeted FIM against the read-only ShopMock checkout; it does not install
+anything on or claim full endpoint visibility into the Ubuntu host. The relay
+exists because Wazuh's embedded journal reader sees no records across the
+rootless user-journal namespace even when those files are mounted. The Podman
+socket is deliberately not mounted into either container.
+
+Running a second OpenSearch JVM for the dedicated Wazuh indexer would exceed
+the lab VM's memory budget. Filebeat therefore writes `wazuh-alerts-*` into the
+existing TLS-enabled `search` service on this deployment. This is a lab resource
+trade-off, not the recommended production topology: production should use a
+dedicated Wazuh indexer and dashboard with independently scoped credentials and
+retention. See the
+[Wazuh Docker docs](https://documentation.wazuh.com/current/deployment-options/docker/index.html).
 
 ## All images (pullable)
 

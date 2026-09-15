@@ -157,6 +157,51 @@ mappers still need repair. Native customer and seller authentication remains val
 Browser: `http://shopmock.uwb.edu/isheng07/` (storefront) and
 `…/isheng07/seller` (Seller Central). FreeIPA Web UI: tunnel `:8443` through the PAW.
 
+### Container-only Wazuh collector
+
+The VM override runs `wazuh-agent` as a rootless Podman container; do not
+install the `wazuh-agent` package on Ubuntu. The collector and manager must use
+the same pinned version. A networkless `wazuh-journal-relay` mounts the rootless
+user journal read-only, selects only named ShopMock workloads, and writes JSON
+to a shared volume that the agent reads. Wazuh's own containers are excluded to
+avoid a recursive collection loop. The relay is required because Wazuh's
+embedded journal reader opens the bind-mounted rootless journal but returns no
+records; do not simplify this back to a direct journald `<localfile>` source.
+
+The lab reuses the existing OpenSearch JVM because the VM cannot hold another
+indexer. Keep `compatibility.override_main_response_version: "true"` on the
+`search` service: Filebeat OSS 7.10 otherwise mistakes OpenSearch `2.13` for
+Elasticsearch 2.x and sends the removed bulk `_type` field, causing repeated
+HTTP 400 errors. `search-data` persists both catalog and Wazuh indices; after a
+first deployment that introduces this volume, rerun `search-seed` to restore
+the catalog documents.
+
+```bash
+# All monitoring containers are running; manager and agent are version-aligned.
+podman compose ps wazuh wazuh-agent wazuh-journal-relay
+
+# The manager knows the collector and reports it active.
+podman compose exec -T wazuh /var/ossec/bin/agent_control -lc
+
+# Filebeat can publish manager alerts into the lab OpenSearch service.
+podman compose logs --tail 100 wazuh | grep -Ei 'filebeat|indexer|error'
+
+# The collector can read a selected workload's Podman journal.
+journalctl --since '5 minutes ago' \
+  CONTAINER_NAME=shopmock-storefront-1 --no-pager
+
+# The relay buffer is non-empty and Wazuh's file collector reports events.
+podman compose exec -T wazuh-journal-relay wc -l /buffer/podman-journal.json
+podman compose exec -T wazuh-agent \
+  sed -n '1,120p' /var/ossec/var/run/wazuh-logcollector.state
+```
+
+The collector is intentionally not a full Ubuntu endpoint agent: its package,
+process, SCA, and rootcheck views would describe the collector container rather
+than the host, so those modules are disabled. Host-level audit, kernel, package,
+and active-response coverage requires a host agent and is outside this
+container-only deployment.
+
 Identity migration caveat: deploy now imports/converges `shopmock-ciam` and
 `shopmock-workforce` into an existing Keycloak volume and disables (but does
 not delete) the retired `shopmock` realm. Existing sessions against the retired

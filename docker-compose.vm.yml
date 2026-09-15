@@ -166,3 +166,44 @@ services:
 
   wazuh:
     networks: !override [sandboxnet]
+
+  # Container-only Wazuh endpoint for the rootless Podman deployment. It sees
+  # the shop user's container journals and selected deployment files, but does
+  # not claim to inventory the Ubuntu host. No package or service is installed
+  # on the host, and the high-privilege Podman API socket is deliberately absent.
+  wazuh-agent:
+    image: wazuh/wazuh-agent:4.14.7
+    restart: unless-stopped
+    environment:
+      WAZUH_MANAGER_SERVER: wazuh
+      WAZUH_MANAGER_PORT: "1514"
+      WAZUH_REGISTRATION_SERVER: wazuh
+      WAZUH_REGISTRATION_PORT: "1515"
+      WAZUH_AGENT_NAME: shopmock-podman-collector
+      # Custom groups must exist on the manager before enrollment. Start in
+      # the built-in group; central policy groups can be added later.
+      WAZUH_AGENT_GROUP: default
+    volumes:
+      - ./config/wazuh-agent.conf:/wazuh-config-mount/etc/ossec.conf:ro,z
+      - wazuh-agent-etc:/var/ossec/etc
+      - wazuh-journal-buffer:/var/log/podman:ro
+      - ./:/host/shopmock:ro,z
+    networks: [sandboxnet]
+    depends_on: [wazuh, wazuh-journal-relay]
+
+  # Wazuh's embedded journald reader cannot traverse the rootless user-journal
+  # namespace even when the files are bind-mounted. This unprivileged relay uses
+  # journalctl to select only workload containers and writes JSON to a shared
+  # volume. It has no network and no Podman API socket.
+  wazuh-journal-relay:
+    build: ./wazuh-journal-relay
+    restart: unless-stopped
+    network_mode: none
+    volumes:
+      - /var/log/journal:/host/journal:ro
+      - /etc/machine-id:/etc/machine-id:ro
+      - wazuh-journal-buffer:/buffer
+
+volumes:
+  wazuh-agent-etc: {}
+  wazuh-journal-buffer: {}

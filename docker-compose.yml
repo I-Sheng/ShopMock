@@ -54,8 +54,14 @@ services:
       OPENSEARCH_INITIAL_ADMIN_PASSWORD: ${OPENSEARCH_ADMIN_PASSWORD}
       bootstrap.memory_lock: "true"
       OPENSEARCH_JAVA_OPTS: -Xms512m -Xmx512m
+      # Filebeat OSS 7.10 otherwise reads "2.13" as Elasticsearch 2.x and
+      # emits the removed bulk metadata field `_type`. This compatibility
+      # response makes it use the typeless 7.10 request format.
+      compatibility.override_main_response_version: "true"
     ulimits:
       memlock: { soft: -1, hard: -1 }
+    volumes:
+      - search-data:/usr/share/opensearch/data
     # soc_net is the read path for the IT console's security section: it queries
     # the wazuh-alerts-* index here. Catalog traffic keeps using edge_net.
     networks: [edge_net, soc_net]
@@ -257,7 +263,7 @@ services:
       # Optional overrides; the defaults below match the realm seed. Setting
       # OE_ALLOWED_ISSUERS replaces the PUBLIC_ORIGIN-derived issuer list.
       OE_ALLOWED_ISSUERS: ${OE_ALLOWED_ISSUERS:-}
-      OE_OIDC_REALM: ${OE_OIDC_REALM:-shopmock}
+      OE_OIDC_REALM: ${OE_OIDC_REALM:-shopmock-workforce}
       OE_OIDC_CLIENT_ID: ${OE_OIDC_CLIENT_ID:-it-operations}
       OE_REQUIRED_ROLE: ${OE_REQUIRED_ROLE:-it-ops}
       OE_PROJECT_NAME: ${OE_PROJECT_NAME:-shopmock}
@@ -305,7 +311,7 @@ services:
       # Optional overrides; the defaults below match the realm seed. Setting
       # FINANCE_ALLOWED_ISSUERS replaces the PUBLIC_ORIGIN-derived issuer list.
       FINANCE_ALLOWED_ISSUERS: ${FINANCE_ALLOWED_ISSUERS:-}
-      FINANCE_OIDC_REALM: ${FINANCE_OIDC_REALM:-shopmock}
+      FINANCE_OIDC_REALM: ${FINANCE_OIDC_REALM:-shopmock-workforce}
       FINANCE_OIDC_CLIENT_ID: ${FINANCE_OIDC_CLIENT_ID:-finance-portal}
       FINANCE_REQUIRED_ROLE: ${FINANCE_REQUIRED_ROLE:-finance}
     # data_net reaches finance-db and nothing this service has a credential for.
@@ -335,7 +341,7 @@ services:
       # Optional overrides; the defaults below match the realm seed. Setting
       # HR_ALLOWED_ISSUERS replaces the PUBLIC_ORIGIN-derived issuer list.
       HR_ALLOWED_ISSUERS: ${HR_ALLOWED_ISSUERS:-}
-      HR_OIDC_REALM: ${HR_OIDC_REALM:-shopmock}
+      HR_OIDC_REALM: ${HR_OIDC_REALM:-shopmock-workforce}
       HR_OIDC_CLIENT_ID: ${HR_OIDC_CLIENT_ID:-hr-portal}
       HR_REQUIRED_ROLE: ${HR_REQUIRED_ROLE:-hr}
     # hr_net only — this service has no route to data_net, so finance-db,
@@ -573,11 +579,36 @@ services:
         required: false
 
   # ---------------- SIEM (on by default) ----------------
-  # Wazuh manager starts with the core stack. The full single-node bundle
-  # (indexer + dashboard) needs a cert bootstrap; see README.
+  # Wazuh manager starts with the core stack. On the constrained lab VM its
+  # Filebeat output uses the existing OpenSearch service instead of running a
+  # second JVM-heavy Wazuh indexer. The VM-only override adds a matching Wazuh
+  # agent container that collects the rootless Podman user's journald logs.
   wazuh:
-    image: wazuh/wazuh-manager:4.8.0
+    image: wazuh/wazuh-manager:4.14.7
+    hostname: wazuh.manager
     restart: unless-stopped
+    environment:
+      INDEXER_URL: https://search:9200
+      INDEXER_USERNAME: admin
+      INDEXER_PASSWORD: ${OPENSEARCH_ADMIN_PASSWORD}
+      # The lab OpenSearch service uses its bundled demo certificate. Keep TLS
+      # encryption, but do not pretend that certificate has a trusted chain.
+      FILEBEAT_SSL_VERIFICATION_MODE: none
+    ulimits:
+      memlock: { soft: -1, hard: -1 }
+      nofile: { soft: 65536, hard: 65536 }
+    volumes:
+      - wazuh-api-configuration:/var/ossec/api/configuration
+      - wazuh-etc:/var/ossec/etc
+      - wazuh-logs:/var/ossec/logs
+      - wazuh-queue:/var/ossec/queue
+      - wazuh-var-multigroups:/var/ossec/var/multigroups
+      - wazuh-integrations:/var/ossec/integrations
+      - wazuh-active-response:/var/ossec/active-response/bin
+      - wazuh-agentless:/var/ossec/agentless
+      - wazuh-wodles:/var/ossec/wodles
+      - wazuh-filebeat-etc:/etc/filebeat
+      - wazuh-filebeat-data:/var/lib/filebeat
     networks: [soc_net]
 
 networks:
@@ -593,9 +624,21 @@ networks:
   hr_net:     { internal: true }   # hr-portal <-> hr-db, nothing else
 
 volumes:
+  search-data: {}
   customer-data: {}
   catalog-data: {}
   orders-data: {}
   finance-data: {}
   hr-data: {}
   ipa-data: {}
+  wazuh-api-configuration: {}
+  wazuh-etc: {}
+  wazuh-logs: {}
+  wazuh-queue: {}
+  wazuh-var-multigroups: {}
+  wazuh-integrations: {}
+  wazuh-active-response: {}
+  wazuh-agentless: {}
+  wazuh-wodles: {}
+  wazuh-filebeat-etc: {}
+  wazuh-filebeat-data: {}
