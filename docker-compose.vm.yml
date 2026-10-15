@@ -9,8 +9,14 @@
 #  * every service joins ONLY the admin-mandated `sandboxnet` (created with:
 #    podman network create --internal --subnet 10.202.0.0/24 sandboxnet) —
 #    the tier segmentation collapses on this host by policy
-#  * the campus URL http://shopmock.uwb.edu/isheng07/ forwards to port 5002,
-#    so the edge binds 127.0.0.1:5002 instead of 0.0.0.0:80
+#  * the edge binds 127.0.0.1:80 rather than 0.0.0.0:80, so the campus URL
+#    http://shopmock.uwb.edu/isheng07/ must forward to port 80 to match.
+#    REQUIRES, once, as root on the host:
+#      sysctl -w net.ipv4.ip_unprivileged_port_start=80
+#      (persist via /etc/sysctl.d/80-shopmock-edge.conf)
+#    Rootless podman may not publish a port below that sysctl (1024 by
+#    default); without it the edge container aborts at start with
+#    "rootlessport cannot expose privileged port 80".
 #  * every other published port binds 127.0.0.1 only (nothing else is exposed
 #    on the campus network); bastion moves off :22, which is the VM's own sshd
 #  * Traefik watches the Podman socket (Docker-compatible API)
@@ -22,7 +28,7 @@ networks:
 services:
   edge:
     ports: !override
-      - "127.0.0.1:5002:80"
+      - "127.0.0.1:80:80"
       - "127.0.0.1:8088:8080"
     volumes: !override
       - ${DOCKER_SOCK:?set DOCKER_SOCK in .env to the podman socket path}:/var/run/docker.sock:ro
