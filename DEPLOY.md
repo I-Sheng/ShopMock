@@ -10,10 +10,10 @@ See [`README.md`](README.md) for orientation and [`INFRA_BUILD_SPEC.md`](INFRA_B
 
 | | Dev machine (Docker) | Lab VM (rootless Podman) |
 | --- | --- | --- |
-| Runtime | docker daemon | rootless podman plus its API socket; sudo only for the one-time `:80` sysctl |
+| Runtime | docker daemon | rootless podman plus its API socket, no sudo anywhere |
 | Compose files | `docker-compose.yml` | plus `docker-compose.vm.yml`, required |
 | Networks | tiered, all internal except `edge_net` and `bastion_net` | one external `sandboxnet`; `hr_net` and `ops_net` still private |
-| Edge | `0.0.0.0:80` | `127.0.0.1:80`; the campus URL `http://shopmock.uwb.edu/isheng07/` forwards there |
+| Edge | `0.0.0.0:80` | `127.0.0.1:5002`; the campus URL `http://shopmock.uwb.edu/isheng07/` forwards there |
 | Tier 0 | `tier0_net` segment | flat network, enforced by FreeIPA HBAC instead |
 | Traefik provider socket | `/var/run/docker.sock` | the podman socket, remapped by the override |
 | Wazuh | manager only | manager plus a container-only agent and journal relay |
@@ -39,31 +39,16 @@ systemctl --user enable --now podman.socket
 loginctl enable-linger "$USER"
 ls -l /run/user/$(id -u)/podman/podman.sock     # must exist
 
-# 2. Let rootless podman publish the edge on :80. Needs root ONCE; a rootless
-#    container may not bind below this value, and the default is 1024.
-echo 'net.ipv4.ip_unprivileged_port_start=80' \
-  | sudo tee /etc/sysctl.d/80-shopmock-edge.conf
-sudo sysctl --system
-sysctl net.ipv4.ip_unprivileged_port_start    # must report 80
-
-# 3. The admin-mandated network; compose declares it external
+# 2. The admin-mandated network; compose declares it external
 podman network create --internal --subnet 10.202.0.0/24 sandboxnet
 
-# 4. A compose provider that understands `!override` tags: the docker-compose v2
+# 3. A compose provider that understands `!override` tags: the docker-compose v2
 #    binary >= 2.24. The Python podman-compose does not work.
 podman compose version
 
-# 5. Clone
+# 4. Clone
 git clone git@github.com:I-Sheng/ShopMock.git && cd ShopMock
 ```
-
-Step 2 is the one piece of this deployment that needs root, and it is also the
-only one the lab admins must sign off on. If they decline, leave the published
-port at `5002` in `docker-compose.vm.yml` and have the campus proxy forward
-there instead — nothing else in the stack depends on the edge's host port.
-Separately, the campus forward for `http://shopmock.uwb.edu/isheng07/` has to
-point at port 80 for the public URL to resolve; that config lives on the campus
-side, not in this repository.
 
 FreeIPA needs cgroups v2 and refuses `--privileged`; confirm
 `podman info | grep cgroupVersion` reports `v2` and that roughly 2 GB is free
@@ -148,7 +133,7 @@ checkout has no `.env`, so the runner supplies one through the
 ## Verification
 
 Substitute the target origin: `http://localhost` on a dev machine,
-`http://127.0.0.1` on the VM. Start with the offline repository checks —
+`http://127.0.0.1:5002` on the VM. Start with the offline repository checks —
 no stack needed, and the fastest way to catch a wiring regression:
 
 ```bash
@@ -161,14 +146,14 @@ Core stack and customer path:
 
 ```bash
 podman compose ps                                     # everything Up
-curl -s http://127.0.0.1/ | head
-curl -s http://127.0.0.1/api/catalog/products | head -c 200
+curl -s http://127.0.0.1:5002/ | head
+curl -s http://127.0.0.1:5002/api/catalog/products | head -c 200
 
 # seller round-trip; the token carries the seller client role
-TOKEN=$(curl -s http://127.0.0.1/auth/realms/shopmock-ciam/protocol/openid-connect/token \
+TOKEN=$(curl -s http://127.0.0.1:5002/auth/realms/shopmock-ciam/protocol/openid-connect/token \
   -d grant_type=password -d client_id=seller-dashboard \
   -d username=nwgadgets -d password='Seller123!' | jq -r .access_token)
-curl -s -H "Authorization: Bearer ${TOKEN}" http://127.0.0.1/api/seller-backend/listings | jq
+curl -s -H "Authorization: Bearer ${TOKEN}" http://127.0.0.1:5002/api/seller-backend/listings | jq
 ```
 
 Workforce portals. `/oe`, `/finance`, and `/hr` use authorization code with PKCE
