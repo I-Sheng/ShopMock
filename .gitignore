@@ -1,2 +1,6 @@
 .env
 .hermes/
+
+# Backup snapshots (see BACKUP.md); they contain .env and the FreeIPA CA
+*.tar.gz
+shopmock-backups/
