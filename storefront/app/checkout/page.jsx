@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useCart } from '../cart-context';
 import { useAuth } from '../auth-context';
+import WrongRoleGate from '../wrong-role-gate';
 
 function money(cents) {
   return `$${(cents / 100).toLocaleString(undefined, {
@@ -47,8 +48,20 @@ function tokenizeCard(digits) {
   return {
     brand: cardBrand(digits),
     last4: digits.slice(-4),
-    token: `tok_mock_${crypto.randomUUID()}`,
+    token: `tok_mock_${randomId()}`,
   };
+}
+
+// crypto.randomUUID() exists only in secure contexts (HTTPS or localhost), so it
+// is undefined when the lab is reached over plain HTTP on the VM's IP.
+// crypto.getRandomValues() is available in every context; build a v4 UUID from it.
+function randomId() {
+  if (typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+  const b = crypto.getRandomValues(new Uint8Array(16));
+  b[6] = (b[6] & 0x0f) | 0x40;
+  b[8] = (b[8] & 0x3f) | 0x80;
+  const h = Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
 }
 
 function validateCheckout(form) {
@@ -76,7 +89,7 @@ function validateCheckout(form) {
 
 export default function CheckoutPage() {
   const { items, count, clear } = useCart();
-  const { ready, authenticated, profile, login, authFetch } = useAuth();
+  const { ready, authenticated, authorized, profile, login, logout, authFetch } = useAuth();
   const [products, setProducts] = useState(null);
   const [placing, setPlacing] = useState(false);
   const [error, setError] = useState(null);
@@ -171,6 +184,19 @@ export default function CheckoutPage() {
   }
 
   if (!ready) return <main className="main"><p className="results-line">Loading…</p></main>;
+
+  if (authenticated && !authorized) {
+    return (
+      <WrongRoleGate
+        area="the ShopMock store"
+        required="customer"
+        profile={profile}
+        logout={logout}
+        homeHref="/seller"
+        homeLabel="Go to Seller Central"
+      />
+    );
+  }
 
   if (!authenticated) {
     return (

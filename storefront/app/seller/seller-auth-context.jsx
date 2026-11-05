@@ -2,6 +2,7 @@
 
 import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import Keycloak from 'keycloak-js';
+import WrongRoleGate from '../wrong-role-gate';
 
 // Seller Central signs in through the `seller-dashboard` Keycloak client, which
 // derives `role: seller` from explicit seller client-role membership. The
@@ -15,6 +16,10 @@ export function SellerAuthProvider({ children }) {
   const [ready, setReady] = useState(false);
   const [authenticated, setAuthenticated] = useState(false);
   const [profile, setProfile] = useState(null);
+  // An SSO session alone is not enough: a customer signed in on the storefront
+  // gets a seller-dashboard token via check-sso, but without the seller client
+  // role. Such a session is authenticated yet NOT authorized for Seller Central.
+  const [authorized, setAuthorized] = useState(false);
 
   useEffect(() => {
     if (kcRef.current) return; // guard StrictMode double-invoke
@@ -36,6 +41,7 @@ export function SellerAuthProvider({ children }) {
         if (auth) {
           const t = kc.tokenParsed || {};
           setProfile({ name: t.name, email: t.email, username: t.preferred_username });
+          setAuthorized(kc.hasResourceRole('seller', 'seller-dashboard'));
         }
         setReady(true);
       })
@@ -51,6 +57,7 @@ export function SellerAuthProvider({ children }) {
   const authFetch = async (path, opts = {}) => {
     const kc = kcRef.current;
     if (!kc || !kc.authenticated) throw new Error('not authenticated');
+    if (!kc.hasResourceRole('seller', 'seller-dashboard')) throw new Error('not a seller account');
     await kc.updateToken(30).catch(() => {});
     return fetch(path, {
       ...opts,
@@ -64,9 +71,20 @@ export function SellerAuthProvider({ children }) {
 
   return (
     <SellerAuthContext.Provider
-      value={{ ready, authenticated, profile, login, logout, authFetch }}
+      value={{ ready, authenticated, authorized, profile, login, logout, authFetch }}
     >
-      {children}
+      {ready && authenticated && !authorized ? (
+        <WrongRoleGate
+          area="Seller Central"
+          required="seller"
+          profile={profile}
+          logout={logout}
+          homeHref="/"
+          homeLabel="Go to the store"
+        />
+      ) : (
+        children
+      )}
     </SellerAuthContext.Provider>
   );
 }

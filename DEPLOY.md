@@ -66,10 +66,14 @@ Run `cp .env.example .env`, then:
 - `PUBLIC_ORIGIN`: the browser-visible origin, with no path. Deploy applies it to
   every Keycloak client's redirect URIs and web origins and derives the trusted
   CIAM issuer from it.
-- `PGRST_JWT_SECRET`: keep byte-identical to `.env.example`. It is the pinned
-  RS256 public JWK matching the signing key in
-  `seed/identity/realm-shopmock-ciam.json`; changing it breaks token
-  verification in every PostgREST service and all five Django services.
+- `KC_REALM_SIGNING_KEY` / `KC_REALM_SIGNING_CERT` / `PGRST_JWT_SECRET`: the
+  realm signing key pair and its public JWK. Both realm imports reference the key
+  through `${KC_REALM_SIGNING_KEY}` placeholders, so the private key exists only
+  in `.env`, never in git. Leave the first two blank and `deploy.sh` generates a
+  fresh pair and rewrites `PGRST_JWT_SECRET` to match. Change all three together
+  or none: a mismatch breaks token verification in every PostgREST service and
+  all five Django services. Copy the generated values into the canonical env file
+  (`SHOPMOCK_ENV_FILE`), or the next CI deploy rotates the key again.
 - Everything else can keep its lab value; the role scripts re-`ALTER` database
   passwords from `.env` on every deploy. The four service-role passwords,
   `WAZUH_DASHBOARD_PASSWORD`, `IPA_FINANCE_PASSWORD`, and `IPA_HR_PASSWORD` are

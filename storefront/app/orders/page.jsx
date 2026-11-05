@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useAuth } from '../auth-context';
+import WrongRoleGate from '../wrong-role-gate';
 
 function money(cents) {
   return `$${(cents / 100).toLocaleString(undefined, {
@@ -11,7 +12,7 @@ function money(cents) {
 }
 
 export default function OrdersPage() {
-  const { ready, authenticated, login, authFetch } = useAuth();
+  const { ready, authenticated, authorized, profile, login, logout, authFetch } = useAuth();
   const [orders, setOrders] = useState(null);
   const [error, setError] = useState(null);
 
@@ -34,10 +35,23 @@ export default function OrdersPage() {
   }, [authFetch]);
 
   useEffect(() => {
-    if (ready && authenticated) load();
-  }, [ready, authenticated, load]);
+    if (ready && authenticated && authorized) load();
+  }, [ready, authenticated, authorized, load]);
 
   if (!ready) return <main className="main"><p className="results-line">Loading…</p></main>;
+
+  if (authenticated && !authorized) {
+    return (
+      <WrongRoleGate
+        area="the ShopMock store"
+        required="customer"
+        profile={profile}
+        logout={logout}
+        homeHref="/seller"
+        homeLabel="Go to Seller Central"
+      />
+    );
+  }
 
   if (!authenticated) {
     return (

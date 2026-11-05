@@ -12,6 +12,9 @@ export function AuthProvider({ children }) {
   const [ready, setReady] = useState(false);
   const [authenticated, setAuthenticated] = useState(false);
   const [profile, setProfile] = useState(null);
+  // A seller's SSO session yields a storefront token via check-sso, but without
+  // the storefront customer client role — authenticated, not authorized.
+  const [authorized, setAuthorized] = useState(false);
 
   useEffect(() => {
     if (kcRef.current) return; // guard StrictMode double-invoke
@@ -40,6 +43,7 @@ export function AuthProvider({ children }) {
         if (auth) {
           const t = kc.tokenParsed || {};
           setProfile({ name: t.name, email: t.email, username: t.preferred_username });
+          setAuthorized(kc.hasResourceRole('customer', 'storefront'));
         }
         setReady(true);
       })
@@ -55,6 +59,7 @@ export function AuthProvider({ children }) {
   const authFetch = async (path, opts = {}) => {
     const kc = kcRef.current;
     if (!kc || !kc.authenticated) throw new Error('not authenticated');
+    if (!kc.hasResourceRole('customer', 'storefront')) throw new Error('not a customer account');
     await kc.updateToken(30).catch(() => {});
     return fetch(path, {
       ...opts,
@@ -68,7 +73,7 @@ export function AuthProvider({ children }) {
 
   return (
     <AuthContext.Provider
-      value={{ ready, authenticated, profile, login, register, logout, authFetch }}
+      value={{ ready, authenticated, authorized, profile, login, register, logout, authFetch }}
     >
       {children}
     </AuthContext.Provider>

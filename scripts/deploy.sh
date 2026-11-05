@@ -99,6 +99,31 @@ ensure_env_var WAZUH_DASHBOARD_PASSWORD
 ensure_env_var IPA_FINANCE_PASSWORD 'Lab1!-'
 ensure_env_var IPA_HR_PASSWORD 'Lab1!-'
 
+# Realm signing key: both Keycloak realms sign with it (imported through
+# ${KC_REALM_SIGNING_KEY}/${KC_REALM_SIGNING_CERT} placeholders) and every
+# service verifies against its public half in PGRST_JWT_SECRET. It lives only
+# in .env — never in seed/. When it is missing or blank, generate a fresh pair
+# and rewrite PGRST_JWT_SECRET so the two can never drift apart.
+if ! grep -q '^KC_REALM_SIGNING_KEY=..' .env || ! grep -q '^KC_REALM_SIGNING_CERT=..' .env; then
+  echo "deploy: KC_REALM_SIGNING_KEY missing from .env — generating a new realm signing key (copy it to the canonical env file too)" >&2
+  keydir=$(mktemp -d); trap 'rm -rf "$keydir"' EXIT
+  openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "$keydir/key.pem" 2>/dev/null
+  openssl req -x509 -new -key "$keydir/key.pem" -subj /CN=shopmock-realm -days 3650 \
+    -outform DER -out "$keydir/cert.der"
+  kc_key=$(openssl pkcs8 -topk8 -nocrypt -in "$keydir/key.pem" -outform DER | base64 | tr -d '\n')
+  kc_cert=$(base64 <"$keydir/cert.der" | tr -d '\n')
+  jwk_n=$(openssl rsa -in "$keydir/key.pem" -noout -modulus | cut -d= -f2 \
+    | python3 -c 'import sys,base64; print(base64.urlsafe_b64encode(bytes.fromhex(sys.stdin.read().strip())).rstrip(b"=").decode())')
+  jwk="{\"kty\":\"RSA\",\"alg\":\"RS256\",\"use\":\"sig\",\"n\":\"${jwk_n}\",\"e\":\"AQAB\"}"
+  sed -i -e '/^KC_REALM_SIGNING_KEY=/d' -e '/^KC_REALM_SIGNING_CERT=/d' -e '/^PGRST_JWT_SECRET=/d' .env
+  {
+    echo "KC_REALM_SIGNING_KEY=${kc_key}"
+    echo "KC_REALM_SIGNING_CERT=${kc_cert}"
+    echo "PGRST_JWT_SECRET='${jwk}'"
+  } >> .env
+  rm -rf "$keydir"; trap - EXIT
+fi
+
 # Rootless podman maps in-container service users (postgres uid 70, keycloak,
 # vault, …) to unprivileged subuids, so bind-mounted seed/ files must be world-
 # readable for them. Checkouts made under a restrictive umask (NETID homes use

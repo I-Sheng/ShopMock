@@ -43,7 +43,7 @@ recoverable from the compose files or the code. Implementation detail lives in
 
 - Decision: `PGRST_JWT_SECRET` carries the realm's public JWK literally, shared by every PostgREST service and every Django service.
 - Why: PostgREST v12 cannot fetch a JWKS URL, and a pinned key also removes a startup dependency on Keycloak.
-- Boundary and residual risk: the value must stay byte-identical to the CIAM signing key in `seed/identity/realm-shopmock-ciam.json`; a mismatch silently fails every token check, and rotating the realm key is a manual coordinated change.
+- Boundary and residual risk: the value must be the public half of `KC_REALM_SIGNING_KEY`, which both realm imports read from `.env` through placeholders (the private key is never committed). A mismatch silently fails every token check. `deploy.sh` generates the key, cert and JWK together whenever the key is missing; any other rotation is a manual, coordinated change.
 - Revisit if: PostgREST gains JWKS support, or key rotation becomes routine.
 
 ## Checkout is a best-effort cross-database saga

@@ -10,7 +10,8 @@ retired=seed/identity/realm-shopmock.json
 
 check 'all realm imports are valid JSON' jq -e . "$ciam" "$workforce" "$retired"
 check 'retired mixed realm is disabled' jq -e '.realm=="shopmock" and .enabled==false and .registrationAllowed==false' "$retired"
-check 'CIAM has only commerce clients and no federation' jq -e '([.clients[].clientId]|sort)==["seller-dashboard","storefront"] and (.components|not)' "$ciam"
+check 'CIAM has only commerce clients and no federation' jq -e '([.clients[].clientId]|sort)==["seller-dashboard","storefront"] and ((.components // {})|keys - ["org.keycloak.keys.KeyProvider"]|length==0)' "$ciam"
+check 'realm imports carry no key material (signing key comes from .env)' jq -e '[..|objects|select(.providerId?=="rsa")|.config.privateKey[0]] | length>0 and all(.=="${KC_REALM_SIGNING_KEY}")' "$ciam" "$workforce"
 check 'workforce has no commerce clients or native users' jq -e '([.clients[].clientId]|index("storefront")|not) and ([.clients[].clientId]|index("seller-dashboard")|not) and (.users|length)==0' "$workforce"
 check 'registration defaults to customer membership' jq -e '.registrationAllowed and (.defaultRoles|index("customer")!=null) and (.roles.realm[]|select(.name=="customer")|.composites.client.storefront==["customer"])' "$ciam"
 check 'seller membership is not a registration default' jq -e '(.defaultRoles|index("seller")|not) and (.users[]|select(.username=="nwgadgets")|.realmRoles==["seller"])' "$ciam"

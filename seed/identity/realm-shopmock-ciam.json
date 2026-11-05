@@ -221,5 +221,34 @@
     "offline_access",
     "uma_authorization",
     "customer"
-  ]
+  ],
+  "components": {
+    "org.keycloak.keys.KeyProvider": [
+      {
+        "name": "shopmock-rsa",
+        "providerId": "rsa",
+        "subComponents": {},
+        "config": {
+          "priority": [
+            "1000"
+          ],
+          "enabled": [
+            "true"
+          ],
+          "active": [
+            "true"
+          ],
+          "algorithm": [
+            "RS256"
+          ],
+          "privateKey": [
+            "${KC_REALM_SIGNING_KEY}"
+          ],
+          "certificate": [
+            "${KC_REALM_SIGNING_CERT}"
+          ]
+        }
+      }
+    ]
+  }
 }
