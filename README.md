@@ -16,6 +16,7 @@ Everything runs on Docker on a dev machine and on rootless Podman on the lab VM.
 | [`INFRA_BUILD_SPEC.md`](INFRA_BUILD_SPEC.md) | Design-to-runtime inventory: services, images, networks, seed data |
 | [`DEPLOY.md`](DEPLOY.md) | The operational guide: deploy, verify, troubleshoot |
 | [`BACKUP.md`](BACKUP.md) | Snapshot, rollback, and restore of credentials, databases, and volumes |
+| [`BACKUP_VERIFY.md`](BACKUP_VERIFY.md) | Proving a snapshot restores, without touching production |
 | [`DECISIONS.md`](DECISIONS.md) | Why the build looks the way it does, and what would change it |
 
 Offline repository checks live in `scripts/verify-identity-boundary.sh`,

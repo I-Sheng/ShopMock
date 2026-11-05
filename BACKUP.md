@@ -278,7 +278,8 @@ On a new host:
 ## Limitations
 
 - The SQL, Keycloak, and volume commands in this guide are not yet scripted
-  or exercised by CI. Test a restore on a throwaway host before relying on it.
+  or exercised by CI. Test a restore on a throwaway host before relying on it; see
+  [`BACKUP_VERIFY.md`](BACKUP_VERIFY.md).
 - Restored FreeIPA data keeps its hostname `ipa.shopmock.lab` and CA. Enrolled
   hosts like the PAW are recreated by deploy and re-enroll against it.
 - Giving `identity` a named volume for `/opt/keycloak/data` would remove the
