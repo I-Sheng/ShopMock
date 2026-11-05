@@ -1,9 +1,10 @@
 # Backing up and restoring ShopMock
 
 How to take a snapshot of a running ShopMock deployment, credentials included,
-and rebuild it on a fresh host if the live one is lost. It covers where each
-piece of state lives on the host, because the answer differs between Docker and
-rootless Podman and decides which backup method is safe.
+and either roll the stack back to it or rebuild it on a fresh host if the live
+one is lost. It assumes rootless Podman, as on the lab VM, and covers where
+each piece of state lives on the host, because that decides which backup method
+is safe.
 
 See [`DEPLOY.md`](DEPLOY.md) for the deploy itself; a restore ends with an
 ordinary `bash scripts/deploy.sh`.
@@ -34,14 +35,16 @@ Two consequences are worth stating plainly:
   with `compose up --force-recreate` or `down`, discards it. Export it
   separately, as below.
 
-## How volumes work on the two hosts
+## How volumes are stored
 
 ### Naming
 
-Compose prefixes every named volume with the project name, which is the
-checkout directory: `search-data` in `docker-compose.yml` becomes
-`shopmock_search-data` on the host. A restore must recreate the volumes under
-those exact names, or compose creates new empty ones beside them.
+Compose prefixes every named volume with the project name, which
+`docker-compose.yml` pins to `shopmock` regardless of the checkout directory:
+`search-data` becomes `shopmock_search-data` on the host. Compose attaches an
+existing volume of that name as it is, and a container that finds data there
+skips its first-time initialization. A restore must therefore recreate the
+volumes under those exact names, or compose creates new empty ones beside them.
 
 The volumes declared across both compose files:
 
@@ -59,16 +62,7 @@ The volumes declared across both compose files:
 Everything under `./seed`, plus `config/wazuh-agent.conf`, is a bind mount
 from the checkout, read-only. Those files are in git, not in a volume.
 
-### Docker, the dev machine
-
-The daemon runs as root and stores each volume at
-`/var/lib/docker/volumes/<name>/_data`. Files keep the UIDs the container wrote
-them with: Postgres data belongs to UID 70 (`postgres` in the alpine image) on
-the host as well. Reading the directory directly needs root, and Docker has no
-`volume export` command, so back up through a throwaway container instead (see
-[Portable volume archive](#portable-volume-archive)).
-
-### Rootless Podman, the lab VM
+### Rootless Podman
 
 Everything belongs to the deploying user. There is no daemon and no root.
 
@@ -104,8 +98,7 @@ ones no container uses.
 
 ## Taking a snapshot
 
-The commands assume the VM, run from the checkout. On a dev machine replace
-`podman` with `docker`; the exceptions are noted.
+Run the commands on the VM, from the checkout.
 
 ```bash
 cd ~/ShopMock
@@ -123,7 +116,7 @@ git status --porcelain > "$OUT/GIT_STATUS"     # should be empty; if not, commit
 ```
 
 This step alone is a usable snapshot. If it is all you need, skip to
-[Encrypt and move off the host](#4-encrypt-and-move-off-the-host).
+[Move off the host](#4-move-off-the-host).
 
 ### 2. Databases, live
 
@@ -180,35 +173,47 @@ Add the five `*-data` volumes to the loop if you want raw copies in addition
 to the SQL dumps. A raw copy restores only onto the same Postgres major
 version, 16.
 
-#### Portable volume archive
-
-Docker has no `volume export`. This form works on both runtimes and also runs
-inside the user namespace on Podman:
+### 4. Move off the host
 
 ```bash
-podman run --rm -v "shopmock_$v:/v:ro" -v "$OUT:/out" docker.io/library/alpine:3.20 \
-  tar -C /v -cpf "/out/$v.tar" .
+tar -C "$(dirname "$OUT")" -czf "$SNAP.tar.gz" "$SNAP"
+scp "$SNAP.tar.gz" backup-host:shopmock/     # anywhere that is not this VM
 ```
 
-On an SELinux-enforcing host, add `:z` to the `$OUT` mount.
+An archive kept only on the VM disappears with the VM. The snapshot holds
+`.env` and the FreeIPA CA and keys, so keep it out of git.
 
-### 4. Encrypt and move off the host
+## Rolling back on the same host
 
-The snapshot contains every lab credential and, in `ipa-data`, the Tier 0 CA
-and Kerberos keys. Encrypt it before it leaves the directory, and never commit
-it, including to a private repository.
+If the volumes are still on the VM, there is nothing to restore: `podman
+compose stop` or `podman compose down`, never `down -v`, leaves them in place,
+and the next `bash scripts/deploy.sh` reattaches them with their data.
+`deploy.sh` never removes volumes.
+
+To go back to an earlier snapshot instead, replace the current volumes with its
+archives. Podman cannot rename a volume, so take a fresh snapshot first if you
+may want the current state back.
 
 ```bash
-tar -C "$(dirname "$OUT")" -czf - "$SNAP" | age -p > "$SNAP.tar.gz.age"
-# or: ... | gpg --symmetric --cipher-algo AES256 -o "$SNAP.tar.gz.gpg"
-rm -rf "$OUT"
-scp "$SNAP.tar.gz.age" backup-host:shopmock/     # anywhere that is not this VM
+cd ~/ShopMock
+SNAP_DIR=../shopmock-2026-11-01-abc1234          # unpacked snapshot
+git checkout "$(cat "$SNAP_DIR/COMMIT")"
+install -m 600 "$SNAP_DIR/.env" .env             # the .env must match the volumes
+podman compose down                              # removes containers, keeps volumes
+for f in "$SNAP_DIR"/*.tar; do
+  v="shopmock_$(basename "$f" .tar)"
+  podman volume rm -f "$v"
+  podman volume create "$v"
+  podman volume import "$v" "$f"
+done
+bash scripts/deploy.sh
 ```
 
-Keep the passphrase separate from the archive, for example in a password
-manager. An archive kept only on the VM disappears with the VM.
+`down` also discards Keycloak's container layer, so finish with step 6 of the
+restore below. If the snapshot has SQL dumps instead of raw `*-data` archives,
+load them with step 5.
 
-## Restoring
+## Restoring on a new host
 
 On a new host:
 
@@ -217,7 +222,7 @@ On a new host:
 2. Unpack and check out the recorded commit:
 
    ```bash
-   age -d "$SNAP.tar.gz.age" | tar -xzf -
+   tar -xzf "$SNAP.tar.gz"
    git clone git@github.com:I-Sheng/ShopMock.git && cd ShopMock
    git checkout "$(cat "../$SNAP/COMMIT")"
    install -m 600 "../$SNAP/.env" .env
@@ -241,9 +246,6 @@ On a new host:
    done
    bash scripts/deploy.sh
    ```
-
-   With Docker, fill each volume through a container instead:
-   `docker run --rm -v "$v:/v" -v "$PWD/../$SNAP:/in:ro" alpine tar -C /v -xpf "/in/$(basename "$f")"`.
 
 5. Load the SQL dumps if you did not restore raw `*-data` volumes. The fresh
    databases already contain the seed rows, so drop and reload the application
