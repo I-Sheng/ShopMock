@@ -15,6 +15,7 @@ Everything runs on Docker on a dev machine and on rootless Podman on the lab VM.
 | [`ShopMock_Company_Infra.md`](ShopMock_Company_Infra.md) | Design artifact: assets, tier model, robustness analysis |
 | [`INFRA_BUILD_SPEC.md`](INFRA_BUILD_SPEC.md) | Design-to-runtime inventory: services, images, networks, seed data |
 | [`DEPLOY.md`](DEPLOY.md) | The operational guide: deploy, verify, troubleshoot |
+| [`BACKUP.md`](BACKUP.md) | Snapshot and restore: credentials, databases, volumes on each host |
 | [`DECISIONS.md`](DECISIONS.md) | Why the build looks the way it does, and what would change it |
 
 Offline repository checks live in `scripts/verify-identity-boundary.sh`,
