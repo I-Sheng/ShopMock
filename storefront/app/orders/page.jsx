@@ -11,6 +11,95 @@ function money(cents) {
   })}`;
 }
 
+// One order row. "Details" lazily loads the line items (orders DB) and their
+// product names (catalog DB, keyed by SKU — the two live in separate databases).
+function OrderCard({ order, authFetch }) {
+  const [open, setOpen] = useState(false);
+  const [lines, setLines] = useState(null);
+  const [error, setError] = useState(null);
+
+  const toggle = async () => {
+    const next = !open;
+    setOpen(next);
+    if (!next || lines) return;
+    try {
+      const res = await authFetch(
+        `/api/orders/order_items?order_id=eq.${order.id}&select=id,product_sku,qty,unit_price_cents&order=id`
+      );
+      if (!res.ok) throw new Error(`order items -> ${res.status}`);
+      const items = await res.json();
+      const skus = [...new Set(items.map((i) => i.product_sku))];
+      let names = {};
+      if (skus.length) {
+        const q = skus.map((s) => `"${s.replace(/"/g, '')}"`).join(',');
+        const pRes = await fetch(
+          `/api/catalog/products?sku=in.(${encodeURIComponent(q)})&select=sku,name`,
+          { cache: 'no-store' }
+        );
+        if (pRes.ok) names = Object.fromEntries((await pRes.json()).map((p) => [p.sku, p.name]));
+      }
+      setLines(items.map((i) => ({ ...i, name: names[i.product_sku] || i.product_sku })));
+    } catch (e) {
+      setError(String(e.message || e));
+    }
+  };
+
+  const subtotal = (lines || []).reduce((s, l) => s + l.qty * l.unit_price_cents, 0);
+
+  return (
+    <div className="order-card">
+      <div>
+        <span className="order-id">Order #{order.id}</span>
+        <span className={`order-status ${order.status}`}>{order.status}</span>
+      </div>
+      <div className="order-meta">
+        <span>{new Date(order.placed_at).toLocaleDateString()}</span>
+        <strong>{money(order.total_cents)}</strong>
+        <button
+          className="order-detail-btn"
+          onClick={toggle}
+          aria-expanded={open}
+          aria-controls={`order-${order.id}-details`}
+        >
+          {open ? 'Hide details' : 'Details'}
+        </button>
+      </div>
+      {open && (
+        <div className="order-details" id={`order-${order.id}-details`}>
+          {error ? (
+            <p className="co-error">{error}</p>
+          ) : lines === null ? (
+            <p className="results-line">Loading items…</p>
+          ) : (
+            <>
+              <div className="od-row od-head">
+                <span>Item</span><span>Qty</span><span>Price</span><span>Subtotal</span>
+              </div>
+              {lines.map((l) => (
+                <div className="od-row" key={l.id}>
+                  <span className="od-name">
+                    {l.name}
+                    <small>{l.product_sku}</small>
+                  </span>
+                  <span>{l.qty}</span>
+                  <span>{money(l.unit_price_cents)}</span>
+                  <span>{money(l.qty * l.unit_price_cents)}</span>
+                </div>
+              ))}
+              <div className="od-total od-sub">
+                <span>Items subtotal</span><span>{money(subtotal)}</span>
+              </div>
+              <div className="od-total od-grand">
+                <span>Order total</span><strong>{money(order.total_cents)}</strong>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function OrdersPage() {
   const { ready, authenticated, authorized, profile, login, logout, authFetch } = useAuth();
   const [orders, setOrders] = useState(null);
@@ -78,16 +167,7 @@ export default function OrdersPage() {
       ) : (
         <div className="order-list">
           {orders.map((o) => (
-            <div className="order-card" key={o.id}>
-              <div>
-                <span className="order-id">Order #{o.id}</span>
-                <span className={`order-status ${o.status}`}>{o.status}</span>
-              </div>
-              <div className="order-meta">
-                <span>{new Date(o.placed_at).toLocaleDateString()}</span>
-                <strong>{money(o.total_cents)}</strong>
-              </div>
-            </div>
+            <OrderCard key={o.id} order={o} authFetch={authFetch} />
           ))}
         </div>
       )}

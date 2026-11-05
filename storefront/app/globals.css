@@ -427,6 +427,26 @@ a { color: inherit; text-decoration: none; }
 .order-status.delivered { background: var(--success-tint); color: var(--success); }
 .order-status.placed, .order-status.paid { background: var(--pending-tint); color: var(--pending); }
 .order-meta { display: flex; align-items: center; gap: 16px; color: var(--ink-soft); font-size: 14px; }
+.order-detail-btn {
+  font: inherit; font-size: 13px; padding: 4px 12px; border-radius: 100px; cursor: pointer;
+  background: var(--surface); color: var(--link); border: 1px solid var(--border-strong);
+}
+.order-detail-btn:hover { background: var(--surface-hover); }
+.order-details { flex-basis: 100%; border-top: 1px solid var(--border); margin-top: 8px; padding-top: 10px; font-size: 14px; }
+.od-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) 48px 90px 100px; gap: 12px;
+  padding: 6px 0; align-items: baseline;
+}
+.od-row > span:not(.od-name) { text-align: right; font-variant-numeric: tabular-nums; }
+.od-head { color: var(--ink-soft); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; border-bottom: 1px solid var(--border); }
+.od-name small { display: block; color: var(--ink-soft); font-size: 12px; }
+.od-total { display: flex; justify-content: space-between; padding: 4px 0; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.od-sub { border-top: 1px solid var(--border); margin-top: 6px; padding-top: 8px; }
+.od-grand { color: var(--ink); font-size: 15px; }
+@media (max-width: 520px) {
+  .od-row { grid-template-columns: minmax(0, 1fr) 32px 80px; }
+  .od-row > span:nth-child(3) { display: none; }
+}
 
 /* ---------- Footer ---------- */
 .footer { background: var(--chrome-900); color: var(--on-chrome-soft); margin-top: 30px; }
